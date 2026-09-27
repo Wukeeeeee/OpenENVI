@@ -19,6 +19,19 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Reset QSettings to clean state for test predictability
 from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QApplication
 from core.i18n import i18n
+import pytest
+
 QSettings("OpenENVI", "OpenENVI").clear()
 i18n.set_language("en")
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """Ensure a single persistent QApplication instance for test suite."""
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
+

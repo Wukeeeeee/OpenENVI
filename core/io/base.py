@@ -51,8 +51,12 @@ class BaseRasterReader(ABC):
         Returns:
             3D numpy array of shape (height, width, len(band_indices)).
         """
-        bands = [self.read_band(idx) for idx in band_indices]
-        return np.stack(bands, axis=-1)
+        if not band_indices:
+            return np.empty((self.metadata.height, self.metadata.width, 0), dtype=np.float32)
+        out = np.empty((self.metadata.height, self.metadata.width, len(band_indices)), dtype=np.float32)
+        for i, idx in enumerate(band_indices):
+            out[..., i] = self.read_band(idx)
+        return out
 
     @abstractmethod
     def read_pixel_profile(self, x: int, y: int) -> np.ndarray:

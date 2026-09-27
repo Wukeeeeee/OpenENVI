@@ -82,17 +82,17 @@ class LayerStackingDialog(QDialog):
         lists_layout = QHBoxLayout()
 
         # Left: Available Bands
-        grp_avail = QGroupBox("Available Bands (From Loaded Layers & Files)")
+        grp_avail = QGroupBox(tr("stacking.grp_avail"))
         layout_avail = QVBoxLayout(grp_avail)
         self.list_avail = QListWidget()
         layout_avail.addWidget(self.list_avail)
 
         btn_bar_avail = QHBoxLayout()
-        self.btn_browse = QPushButton("Add from File...")
+        self.btn_browse = QPushButton(tr("stacking.btn_browse"))
         self.btn_browse.clicked.connect(self._browse_external_file)
         btn_bar_avail.addWidget(self.btn_browse)
 
-        self.btn_add_selected = QPushButton("Add Selected ->")
+        self.btn_add_selected = QPushButton(tr("stacking.btn_add_selected"))
         self.btn_add_selected.clicked.connect(self._add_selected_bands)
         btn_bar_avail.addWidget(self.btn_add_selected)
 
@@ -100,25 +100,25 @@ class LayerStackingDialog(QDialog):
         lists_layout.addWidget(grp_avail, stretch=1)
 
         # Right: Selected Bands for Output
-        grp_selected = QGroupBox("Bands to Stack (Output Order)")
+        grp_selected = QGroupBox(tr("stacking.grp_selected"))
         layout_selected = QVBoxLayout(grp_selected)
         self.list_selected = QListWidget()
         layout_selected.addWidget(self.list_selected)
 
         order_bar = QHBoxLayout()
-        self.btn_up = QPushButton("▲ Move Up")
+        self.btn_up = QPushButton(tr("stacking.btn_up"))
         self.btn_up.clicked.connect(self._move_up)
         order_bar.addWidget(self.btn_up)
 
-        self.btn_down = QPushButton("▼ Move Down")
+        self.btn_down = QPushButton(tr("stacking.btn_down"))
         self.btn_down.clicked.connect(self._move_down)
         order_bar.addWidget(self.btn_down)
 
-        self.btn_remove = QPushButton("Remove")
+        self.btn_remove = QPushButton(tr("stacking.btn_remove"))
         self.btn_remove.clicked.connect(self._remove_selected)
         order_bar.addWidget(self.btn_remove)
 
-        self.btn_clear = QPushButton("Clear All")
+        self.btn_clear = QPushButton(tr("stacking.btn_clear"))
         self.btn_clear.clicked.connect(self.list_selected.clear)
         order_bar.addWidget(self.btn_clear)
 
@@ -129,7 +129,7 @@ class LayerStackingDialog(QDialog):
 
         # Output options
         out_bar = QHBoxLayout()
-        out_bar.addWidget(QLabel("Output Layer Name:"))
+        out_bar.addWidget(QLabel(tr("stacking.out_name")))
         self.txt_out_name = QLineEdit("Layer_Stacked")
         out_bar.addWidget(self.txt_out_name)
         layout.addLayout(out_bar)
@@ -191,7 +191,7 @@ class LayerStackingDialog(QDialog):
                 item.setData(Qt.UserRole, (reader, b, f"[{fname}] {b_name}"))
                 self.list_avail.addItem(item)
         except Exception as e:
-            QMessageBox.critical(self, "Open Error", f"Could not open file: {e}")
+            QMessageBox.critical(self, tr("dialog.error"), f"{tr('stacking.err_open')}: {e}")
 
     def _add_selected_bands(self):
         for item in self.list_avail.selectedItems():
@@ -221,7 +221,11 @@ class LayerStackingDialog(QDialog):
 
     def _start_stacking(self):
         if self.list_selected.count() == 0:
-            QMessageBox.warning(self, "No Bands Selected", "Please select at least one band to stack.")
+            QMessageBox.warning(
+                self,
+                tr("stacking.err_no_bands_title"),
+                tr("stacking.err_no_bands_msg"),
+            )
             return
 
         sources = []
@@ -250,7 +254,7 @@ class LayerStackingDialog(QDialog):
     def _on_stacking_failed(self, err: str):
         self.btn_ok.setEnabled(True)
         self.progress_bar.hide()
-        QMessageBox.critical(self, "Stacking Failed", f"Failed to stack layers: {err}")
+        QMessageBox.critical(self, tr("dialog.error"), f"{tr('stacking.err_failed')}: {err}")
 
     def closeEvent(self, event):
         for r in self._external_readers:

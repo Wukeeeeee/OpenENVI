@@ -47,7 +47,7 @@ class SyntheticDataDialog(QDialog):
         # Format
         self.cb_format = QComboBox()
         self.cb_format.addItems(["ENVI Standard (.hdr/.dat)", "GeoTIFF (.tif)"])
-        form.addRow("File Format:", self.cb_format)
+        form.addRow(tr("dialog.synthetic.file_format"), self.cb_format)
 
         # Dimensions
         self.spin_size = QSpinBox()
@@ -67,10 +67,10 @@ class SyntheticDataDialog(QDialog):
         self.edit_dir = QLineEdit(tempfile.gettempdir())
         h_dir = QHBoxLayout()
         h_dir.addWidget(self.edit_dir)
-        btn_browse = QPushButton("Browse...")
+        btn_browse = QPushButton(tr("dialog.btn_browse"))
         btn_browse.clicked.connect(self._browse)
         h_dir.addWidget(btn_browse)
-        form.addRow("Output Directory:", h_dir)
+        form.addRow(tr("dialog.synthetic.output_dir"), h_dir)
 
         layout.addLayout(form)
         layout.addStretch()
@@ -102,7 +102,11 @@ class SyntheticDataDialog(QDialog):
         out_dir = self.edit_dir.text().strip()
 
         if not os.path.isdir(out_dir):
-            QMessageBox.warning(self, "Invalid Directory", "Specified output directory does not exist.")
+            QMessageBox.warning(
+                self,
+                tr("synthetic.err_dir_title"),
+                tr("synthetic.err_dir_msg"),
+            )
             return
 
         try:
@@ -122,4 +126,8 @@ class SyntheticDataDialog(QDialog):
             self.dataset_generated.emit(res_path)
             self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Generation Failed", f"Failed to generate synthetic data: {e}")
+            QMessageBox.critical(
+                self,
+                tr("synthetic.err_gen_title"),
+                f"{tr('synthetic.err_gen_msg')}: {e}",
+            )

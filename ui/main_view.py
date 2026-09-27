@@ -9,11 +9,13 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPen
+from PySide6.QtGui import QBrush, QColor, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsPolygonItem,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -63,9 +65,25 @@ class MainViewWidget(QWidget):
         overview_layout.setContentsMargins(2, 2, 2, 2)
         overview_layout.setSpacing(1)
 
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(2, 0, 2, 0)
+        header_layout.setSpacing(2)
+
         self.lbl_overview = QLabel("Overview", self.overview_frame)
-        self.lbl_overview.setStyleSheet("font-size: 10px; color: #8e9297; font-weight: bold; padding: 2px;")
-        overview_layout.addWidget(self.lbl_overview)
+        self.lbl_overview.setStyleSheet("font-size: 10px; color: #8e9297; font-weight: bold;")
+        header_layout.addWidget(self.lbl_overview, stretch=1)
+
+        self.btn_toggle_overview = QPushButton("−", self.overview_frame)
+        self.btn_toggle_overview.setFixedSize(16, 16)
+        self.btn_toggle_overview.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_overview.setStyleSheet(
+            "QPushButton { background: transparent; color: #8e9297; border: none; font-size: 12px; font-weight: bold; }"
+            "QPushButton:hover { color: #ffffff; background: #4e535a; border-radius: 2px; }"
+        )
+        self.btn_toggle_overview.clicked.connect(self.toggle_overview_collapsed)
+        header_layout.addWidget(self.btn_toggle_overview)
+
+        overview_layout.addLayout(header_layout)
 
         self.overview_glw = pg.GraphicsLayoutWidget(self.overview_frame)
         self.overview_glw.setBackground("#1a1c1e")
@@ -99,6 +117,11 @@ class MainViewWidget(QWidget):
         self._rubber_curve: Optional[pg.PlotCurveItem] = None
         self._roi_items: List[pg.GraphicsObject] = []
 
+        # Override ViewBox mouseDragEvent to prevent accidental canvas jerk/pan when drawing ROI
+        self._orig_vb_mouseDragEvent = self.view_box.mouseDragEvent
+        self.view_box.mouseDragEvent = self._custom_mouse_drag_event
+        self.setFocusPolicy(Qt.StrongFocus)
+
         # Connect scene mouse events
         self.glw.scene().sigMouseMoved.connect(self._on_mouse_moved)
         self.image_item.mouseClickEvent = self._on_image_clicked
@@ -106,6 +129,8 @@ class MainViewWidget(QWidget):
 
         # Connect event bus
         event_bus.stretch_mode_changed.connect(self.set_stretch_mode)
+
+        self._overview_collapsed: bool = False
 
         # Retranslate on creation and on language change
         self.retranslate_ui()
@@ -116,14 +141,46 @@ class MainViewWidget(QWidget):
         """Update texts based on active language."""
         from core.i18n import tr
         self.lbl_overview.setText(tr("main_view.overview"))
+        if getattr(self, "_overview_collapsed", False):
+            self.btn_toggle_overview.setToolTip(tr("main_view.overview_restore"))
+        else:
+            self.btn_toggle_overview.setToolTip(tr("main_view.overview_minimize"))
+
+    def toggle_overview_collapsed(self) -> None:
+        """Toggle overview inset between collapsed (title strip) and full thumbnail view."""
+        self._overview_collapsed = not getattr(self, "_overview_collapsed", False)
+        from core.i18n import tr
+        if self._overview_collapsed:
+            self.overview_glw.setVisible(False)
+            self.overview_frame.setFixedSize(110, 24)
+            self.btn_toggle_overview.setText("+")
+            self.btn_toggle_overview.setToolTip(tr("main_view.overview_restore"))
+        else:
+            self.overview_glw.setVisible(True)
+            self.overview_frame.setFixedSize(200, 150)
+            self.btn_toggle_overview.setText("−")
+            self.btn_toggle_overview.setToolTip(tr("main_view.overview_minimize"))
+        self._reposition_overview()
+
+    def set_overview_visible(self, visible: bool) -> None:
+        """Show or hide the overview inset completely."""
+        self.overview_frame.setVisible(visible)
+
+    def is_overview_visible(self) -> bool:
+        """Return whether overview inset is visible."""
+        return self.overview_frame.isVisible()
+
+    def _reposition_overview(self) -> None:
+        """Reposition overview inset to bottom-right corner."""
+        margin = 16
+        fw = self.overview_frame.width()
+        fh = self.overview_frame.height()
+        self.overview_frame.move(max(0, self.width() - fw - margin), max(0, self.height() - fh - margin))
 
     def resizeEvent(self, event) -> None:
         """Reposition overview inset to bottom-right corner."""
         super().resizeEvent(event)
-        margin = 16
-        fw = self.overview_frame.width()
-        fh = self.overview_frame.height()
-        self.overview_frame.move(self.width() - fw - margin, self.height() - fh - margin)
+        self._reposition_overview()
 
     def display_raster(
         self,
@@ -170,6 +227,55 @@ class MainViewWidget(QWidget):
         self.overview_img.clear()
         self.extent_roi.setVisible(False)
 
+    def _custom_mouse_drag_event(self, ev) -> None:
+        """Handle mouse dragging on ViewBox.
+
+        When drawing ROI:
+        - Middle-button drag still allows smooth viewport panning.
+        - Left-button dragging is suppressed so micro-movements during vertex clicking do NOT jerk canvas.
+        """
+        if self._is_drawing_roi:
+            if ev.button() == Qt.MiddleButton:
+                self._orig_vb_mouseDragEvent(ev)
+            else:
+                ev.accept()
+        else:
+            self._orig_vb_mouseDragEvent(ev)
+
+    def keyPressEvent(self, event) -> None:
+        """Handle keyboard shortcuts during ROI drawing."""
+        if self._is_drawing_roi:
+            if event.key() in (Qt.Key_Backspace, Qt.Key_Z):
+                self.undo_last_vertex()
+                event.accept()
+                return
+            elif event.key() == Qt.Key_Escape:
+                self.cancel_current_polygon()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def undo_last_vertex(self) -> None:
+        """Remove the most recently added vertex during polygon drawing."""
+        if self._current_poly_pts:
+            self._current_poly_pts.pop()
+            xs = [p[0] for p in self._current_poly_pts]
+            ys = [p[1] for p in self._current_poly_pts]
+            if self._drawing_curve:
+                self._drawing_curve.setData(xs, ys)
+            if not self._current_poly_pts and self._rubber_curve:
+                self._rubber_curve.setData([], [])
+            event_bus.status_message.emit(tr("status.roi_undone_vertex"), 2000)
+
+    def cancel_current_polygon(self) -> None:
+        """Cancel drawing the current in-progress polygon."""
+        self._current_poly_pts.clear()
+        if self._drawing_curve:
+            self._drawing_curve.setData([], [])
+        if self._rubber_curve:
+            self._rubber_curve.setData([], [])
+        event_bus.status_message.emit(tr("status.roi_cancelled"), 2000)
+
     def start_drawing_polygon(self, color: str = "#00ffcc") -> None:
         """Enter interactive polygon drawing mode."""
         self._is_drawing_roi = True
@@ -189,11 +295,15 @@ class MainViewWidget(QWidget):
         self._rubber_curve = pg.PlotCurveItem([], [], pen=pg.mkPen(color=color, width=1.5, style=Qt.DashLine))
         self.view_box.addItem(self._rubber_curve)
         self.setCursor(Qt.CrossCursor)
-        event_bus.status_message.emit("ROI Polygon: Left-click to add vertex, Right-click to close polygon", 5000)
+        self.setFocus()
+        event_bus.status_message.emit(
+            tr("status.roi_drawing_hint"), 6000
+        )
 
     def stop_drawing_polygon(self) -> None:
         """Exit polygon drawing mode and clean up rubber band line."""
         self._is_drawing_roi = False
+        self._current_poly_pts.clear()
         self.setCursor(Qt.ArrowCursor)
         if self._drawing_curve and self._drawing_curve in self.view_box.addedItems:
             self.view_box.removeItem(self._drawing_curve)
@@ -203,16 +313,27 @@ class MainViewWidget(QWidget):
             self._rubber_curve = None
 
     def add_roi_overlay(self, points: List[Tuple[float, float]], color: str = "#00ffcc") -> None:
-        """Render a finished closed ROI polygon on the canvas."""
+        """Render a finished closed ROI polygon with boundary and semi-transparent fill."""
         if len(points) < 3:
             return
         xs = [p[0] for p in points] + [points[0][0]]
         ys = [p[1] for p in points] + [points[0][1]]
         item = pg.PlotDataItem(
-            xs, ys, pen=pg.mkPen(color=color, width=2), symbol="o", symbolSize=5, symbolBrush=color
+            xs, ys, pen=pg.mkPen(color=color, width=2), symbol="o", symbolSize=4, symbolBrush=color
         )
         self.view_box.addItem(item)
         self._roi_items.append(item)
+
+        try:
+            qpoly = QPolygonF([QPointF(x, y) for x, y in points])
+            poly_item = QGraphicsPolygonItem(qpoly)
+            qc = QColor(color)
+            poly_item.setBrush(QBrush(QColor(qc.red(), qc.green(), qc.blue(), 45)))
+            poly_item.setPen(QPen(Qt.NoPen))
+            self.view_box.addItem(poly_item)
+            self._roi_items.append(poly_item)
+        except Exception:
+            pass
 
     def clear_roi_overlays(self) -> None:
         """Clear all drawn ROI overlays from canvas."""
@@ -229,10 +350,16 @@ class MainViewWidget(QWidget):
                 self.view_box.removeItem(item)
 
     def redraw_rois(self, rois: list) -> None:
-        """Clear and redraw all ROIs (polygons and bounding boxes)."""
+        """Clear and redraw all ROIs (multi-polygons and bounding boxes)."""
         self.clear_roi_overlays()
         for roi in rois:
-            if hasattr(roi, "polygon_points") and roi.polygon_points and len(roi.polygon_points) >= 3:
+            if not getattr(roi, "is_visible", True):
+                continue
+            if hasattr(roi, "polygons") and roi.polygons:
+                for poly_pts in roi.polygons:
+                    if len(poly_pts) >= 3:
+                        self.add_roi_overlay(poly_pts, color=roi.color)
+            elif hasattr(roi, "polygon_points") and roi.polygon_points and len(roi.polygon_points) >= 3:
                 self.add_roi_overlay(roi.polygon_points, color=roi.color)
             elif hasattr(roi, "bbox") and roi.bbox is not None:
                 x0, y0, x1, y1 = roi.bbox
@@ -290,6 +417,21 @@ class MainViewWidget(QWidget):
             last_x, last_y = self._current_poly_pts[-1]
             self._rubber_curve.setData([last_x, mouse_point.x()], [last_y, mouse_point.y()])
 
+    def _finish_current_polygon(self) -> None:
+        """Complete the current polygon, emit signal, and stay ready for next polygon."""
+        if len(self._current_poly_pts) < 3:
+            return
+        completed_pts = list(self._current_poly_pts)
+        self._current_poly_pts.clear()
+        if self._drawing_curve:
+            self._drawing_curve.setData([], [])
+        if self._rubber_curve:
+            self._rubber_curve.setData([], [])
+
+        color = self._roi_draw_color
+        self.add_roi_overlay(completed_pts, color=color)
+        self.polygon_roi_completed.emit(completed_pts)
+
     def _on_image_clicked(self, event) -> None:
         """Handle mouse click on the image canvas."""
         pos = event.pos()
@@ -304,15 +446,24 @@ class MainViewWidget(QWidget):
                     ys = [p[1] for p in self._current_poly_pts]
                     if self._drawing_curve:
                         self._drawing_curve.setData(xs, ys)
+                    node_count = len(self._current_poly_pts)
+                    event_bus.status_message.emit(
+                        tr("status.roi_node_added").format(count=node_count), 3000
+                    )
                     event.accept()
                     return
-            elif event.button() == Qt.RightButton or event.double():
+            elif event.button() == Qt.RightButton:
                 if len(self._current_poly_pts) >= 3:
-                    completed_pts = list(self._current_poly_pts)
-                    color = self._roi_draw_color
+                    self._finish_current_polygon()
+                    event.accept()
+                    return
+                elif len(self._current_poly_pts) == 0:
+                    # Right-click with 0 vertices stops drawing mode
                     self.stop_drawing_polygon()
-                    self.add_roi_overlay(completed_pts, color=color)
-                    self.polygon_roi_completed.emit(completed_pts)
+                    event.accept()
+                    return
+                else:
+                    event_bus.status_message.emit(tr("status.roi_need_3_nodes"), 2500)
                     event.accept()
                     return
 

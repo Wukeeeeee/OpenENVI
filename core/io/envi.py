@@ -152,12 +152,35 @@ class ENVIRasterReader(BaseRasterReader):
                 shape=shape,
             )
 
+        # Check coordinate system string first, fallback to map info crs
+        crs_str = None
+        raw_cs = self._raw_header.get("coordinate system string")
+        if raw_cs:
+            crs_str = ",".join(raw_cs) if isinstance(raw_cs, list) else str(raw_cs)
+        elif self._map_info:
+            crs_str = self._map_info.get("crs")
+
+        # Compute affine transform for ENVI
+        transform = None
+        if self._map_info:
+            import rasterio.transform
+            tie_x = self._map_info["tie_x"]
+            tie_y = self._map_info["tie_y"]
+            easting = self._map_info["easting"]
+            northing = self._map_info["northing"]
+            dx = self._map_info["dx"]
+            dy = self._map_info["dy"]
+            west = easting - (tie_x - 1.0) * dx
+            north = northing + (tie_y - 1.0) * dy
+            transform = rasterio.transform.from_origin(west, north, dx, dy)
+
         meta = RasterMetadata(
             width=self._samples,
             height=self._lines,
             bands=self._bands,
             dtype=str(self._dtype),
-            crs=self._map_info.get("projection") if self._map_info else None,
+            crs=crs_str,
+            transform=transform,
             interleave=self._interleave.upper(),
             band_details=band_details,
             raw_header=self._raw_header,
@@ -217,6 +240,30 @@ class ENVIRasterReader(BaseRasterReader):
             dx = float(raw[5])
             dy = float(raw[6])
 
+            zone = None
+            hemi = "north"
+            datum = "WGS-84"
+            if len(raw) > 7:
+                try:
+                    zone = int(raw[7])
+                except (ValueError, TypeError):
+                    zone = None
+            if len(raw) > 8:
+                hemi = raw[8].strip().lower()
+            if len(raw) > 9:
+                datum = raw[9].strip()
+
+            # Determine standard CRS string
+            crs = None
+            proj_upper = proj.upper()
+            if "UTM" in proj_upper and zone is not None:
+                epsg = 32600 + zone if "north" in hemi else 32700 + zone
+                crs = f"EPSG:{epsg}"
+            elif "GEOGRAPHIC" in proj_upper or "LAT/LON" in proj_upper:
+                crs = "EPSG:4326"
+            else:
+                crs = proj
+
             self._map_info = {
                 "projection": proj,
                 "tie_x": tie_x,
@@ -225,6 +272,10 @@ class ENVIRasterReader(BaseRasterReader):
                 "northing": northing,
                 "dx": dx,
                 "dy": dy,
+                "zone": zone,
+                "hemisphere": hemi,
+                "datum": datum,
+                "crs": crs,
             }
         except (ValueError, IndexError):
             self._map_info = None

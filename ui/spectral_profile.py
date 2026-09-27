@@ -8,6 +8,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
+    QComboBox,
     QDockWidget,
     QHBoxLayout,
     QLabel,
@@ -39,6 +40,17 @@ class SpectralProfileDock(QDockWidget):
         self._lbl_info.setStyleSheet("color: #8e9297; font-weight: 500;")
         header.addWidget(self._lbl_info, stretch=1)
 
+        # X-Axis Mode Selector (Band Index vs Wavelength)
+        self._lbl_mode = QLabel("X-Axis: ")
+        self._lbl_mode.setStyleSheet("color: #8e9297; font-weight: 500;")
+        header.addWidget(self._lbl_mode)
+
+        self._combo_x_axis = QComboBox()
+        self._combo_x_axis.addItem("Wavelength (nm)", "wavelength")
+        self._combo_x_axis.addItem("Band Number", "band")
+        self._combo_x_axis.currentIndexChanged.connect(self._on_axis_mode_changed)
+        header.addWidget(self._combo_x_axis)
+
         self._btn_clear = QPushButton("Clear")
         self._btn_clear.clicked.connect(self.clear_spectrum)
         header.addWidget(self._btn_clear)
@@ -51,10 +63,12 @@ class SpectralProfileDock(QDockWidget):
 
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
-        self.plot_widget.setLabel("bottom", "Band / Wavelength", units="nm")
-        self.plot_widget.setLabel("left", "Value / Reflectance")
-        self.plot_widget.getPlotItem().getAxis("bottom").setTextPen("#8e9297")
+        bottom_axis = self.plot_widget.getPlotItem().getAxis("bottom")
+        bottom_axis.enableAutoSIPrefix(False)
+        bottom_axis.setTextPen("#8e9297")
         self.plot_widget.getPlotItem().getAxis("left").setTextPen("#8e9297")
+        self.plot_widget.setLabel("bottom", "Wavelength (nm)")
+        self.plot_widget.setLabel("left", "Value / Reflectance")
 
         # Plot curve item
         self._curve = self.plot_widget.plot(
@@ -71,8 +85,14 @@ class SpectralProfileDock(QDockWidget):
         # Connect to event bus
         event_bus.pixel_clicked.connect(self._on_pixel_clicked)
 
-        # Retranslate on creation and on language change
+        # Cached active spectrum data for dynamic axis replotting
+        self._current_values: Optional[np.ndarray] = None
+        self._current_wavelengths: Optional[np.ndarray] = None
+        self._current_x: int = 0
+        self._current_y: int = 0
         self._last_stats: Optional[dict] = None
+
+        # Retranslate on creation and on language change
         self.retranslate_ui()
         from core.i18n import i18n
         i18n.language_changed.connect(lambda _: self.retranslate_ui())
@@ -82,12 +102,55 @@ class SpectralProfileDock(QDockWidget):
         from core.i18n import tr
         self.setWindowTitle(tr("dock.spectral_profile"))
         self._btn_clear.setText(tr("spectral_profile.btn_clear"))
+        self._lbl_mode.setText(tr("spectral_profile.lbl_mode"))
+
+        cur_idx = self._combo_x_axis.currentIndex()
+        self._combo_x_axis.blockSignals(True)
+        self._combo_x_axis.setItemText(0, tr("spectral_profile.mode_wavelength"))
+        self._combo_x_axis.setItemText(1, tr("spectral_profile.mode_band"))
+        self._combo_x_axis.setCurrentIndex(cur_idx if cur_idx >= 0 else 0)
+        self._combo_x_axis.blockSignals(False)
+
         self.plot_widget.setLabel("left", tr("spectral_profile.axis_y"))
-        self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_wavelength"), units="nm")
+        if self._combo_x_axis.currentData() == "band":
+            self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_band"))
+        else:
+            self.plot_widget.setLabel("bottom", f"{tr('spectral_profile.axis_x_wavelength')} (nm)")
+
         if self._last_stats is None:
             self._lbl_info.setText(tr("spectral_profile.info_idle"))
         else:
             self._lbl_info.setText(tr("spectral_profile.info_stats").format(**self._last_stats))
+
+    def _on_axis_mode_changed(self, index: int) -> None:
+        """Handle user changing X-axis mode between Wavelength and Band Number."""
+        from core.i18n import tr
+        mode = self._combo_x_axis.currentData()
+        if mode == "band":
+            self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_band"))
+        else:
+            self.plot_widget.setLabel("bottom", f"{tr('spectral_profile.axis_x_wavelength')} (nm)")
+        self._replot_current()
+
+    def _replot_current(self) -> None:
+        """Replot active spectrum using selected X-axis mode."""
+        if self._current_values is None or len(self._current_values) == 0:
+            return
+
+        values = self._current_values
+        wavelengths = self._current_wavelengths
+        mode = self._combo_x_axis.currentData()
+
+        if mode == "wavelength" and wavelengths is not None and len(wavelengths) == len(values):
+            # Sort monotonically by wavelength so lines never cross or loop backwards
+            sort_idx = np.argsort(wavelengths)
+            x_data = wavelengths[sort_idx]
+            y_data = values[sort_idx]
+        else:
+            x_data = np.arange(1, len(values) + 1)
+            y_data = values
+
+        self._curve.setData(x_data, y_data)
 
     @Slot(int, int)
     def _on_pixel_clicked(self, x: int, y: int) -> None:
@@ -115,15 +178,22 @@ class SpectralProfileDock(QDockWidget):
             self.clear_spectrum()
             return
 
-        from core.i18n import tr
-        if wavelengths is not None and len(wavelengths) == len(values):
-            x_data = wavelengths
-            self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_wavelength"), units="nm")
-        else:
-            x_data = np.arange(1, len(values) + 1)
-            self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_band"))
+        self._current_values = np.asarray(values, dtype=np.float64)
+        self._current_wavelengths = (
+            np.asarray(wavelengths, dtype=np.float64) if wavelengths is not None else None
+        )
+        self._current_x = x
+        self._current_y = y
 
-        self._curve.setData(x_data, values)
+        # Auto-switch combo to Band Number if no wavelengths are present
+        if wavelengths is None or len(wavelengths) != len(values):
+            if self._combo_x_axis.currentData() == "wavelength":
+                self._combo_x_axis.blockSignals(True)
+                self._combo_x_axis.setCurrentIndex(1)  # band
+                self._combo_x_axis.blockSignals(False)
+        self._replot_current()
+
+        from core.i18n import tr
         self._last_stats = {
             "x": x,
             "y": y,
@@ -144,14 +214,18 @@ class SpectralProfileDock(QDockWidget):
         if len(values) == 0:
             return
 
-        if wavelengths is not None and len(wavelengths) == len(values):
-            x_data = wavelengths
+        mode = self._combo_x_axis.currentData()
+        if mode == "wavelength" and wavelengths is not None and len(wavelengths) == len(values):
+            sort_idx = np.argsort(wavelengths)
+            x_data = wavelengths[sort_idx]
+            y_data = values[sort_idx]
         else:
             x_data = np.arange(1, len(values) + 1)
+            y_data = values
 
         self.plot_widget.plot(
             x=x_data,
-            y=values,
+            y=y_data,
             name=name,
             pen=pg.mkPen(color=color, width=2.0),
             symbol="s",
@@ -161,6 +235,9 @@ class SpectralProfileDock(QDockWidget):
 
     def clear_spectrum(self) -> None:
         """Clear the current spectrum curves."""
+        self._current_values = None
+        self._current_wavelengths = None
+        self._last_stats = None
         self.plot_widget.clear()
         self._curve = self.plot_widget.plot(
             pen=pg.mkPen(color="#58a6ff", width=1.5),
@@ -169,4 +246,5 @@ class SpectralProfileDock(QDockWidget):
             symbolBrush="#58a6ff",
             symbolPen=None,
         )
-        self._lbl_info.setText("Position: (-, -) | Spectrum: Cleared")
+        from core.i18n import tr
+        self._lbl_info.setText(tr("spectral_profile.cleared"))

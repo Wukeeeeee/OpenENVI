@@ -111,23 +111,23 @@ class ColorTransformDialog(QDialog):
         layout.setSpacing(10)
 
         # 1. Transform mode
-        grp_mode = QGroupBox("Transformation Mode")
+        grp_mode = QGroupBox(tr("color.grp_mode"))
         l_mode = QVBoxLayout(grp_mode)
         self.cb_mode = QComboBox()
-        self.cb_mode.addItem("RGB -> HSV (Hue, Saturation, Value)", "RGB_TO_HSV")
-        self.cb_mode.addItem("HSV -> RGB (Red, Green, Blue)", "HSV_TO_RGB")
-        self.cb_mode.addItem("RGB -> Grayscale Luminance", "RGB_TO_GRAY")
+        self.cb_mode.addItem(tr("color.mode_rgb_hsv"), "RGB_TO_HSV")
+        self.cb_mode.addItem(tr("color.mode_hsv_rgb"), "HSV_TO_RGB")
+        self.cb_mode.addItem(tr("color.mode_rgb_gray"), "RGB_TO_GRAY")
         self.cb_mode.currentIndexChanged.connect(self._on_mode_changed)
         l_mode.addWidget(self.cb_mode)
         layout.addWidget(grp_mode)
 
         # 2. Channel Assignment
-        self.grp_channels = QGroupBox("Input Channel Assignment")
+        self.grp_channels = QGroupBox(tr("color.grp_channels"))
         l_chan = QVBoxLayout(self.grp_channels)
 
         # Row 1
         h1 = QHBoxLayout()
-        self.lbl_ch1 = QLabel("Red Band (R):")
+        self.lbl_ch1 = QLabel(tr("color.ch_r"))
         self.cb_ch1 = QComboBox()
         h1.addWidget(self.lbl_ch1)
         h1.addWidget(self.cb_ch1, stretch=1)
@@ -135,7 +135,7 @@ class ColorTransformDialog(QDialog):
 
         # Row 2
         h2 = QHBoxLayout()
-        self.lbl_ch2 = QLabel("Green Band (G):")
+        self.lbl_ch2 = QLabel(tr("color.ch_g"))
         self.cb_ch2 = QComboBox()
         h2.addWidget(self.lbl_ch2)
         h2.addWidget(self.cb_ch2, stretch=1)
@@ -143,7 +143,7 @@ class ColorTransformDialog(QDialog):
 
         # Row 3
         h3 = QHBoxLayout()
-        self.lbl_ch3 = QLabel("Blue Band (B):")
+        self.lbl_ch3 = QLabel(tr("color.ch_b"))
         self.cb_ch3 = QComboBox()
         h3.addWidget(self.lbl_ch3)
         h3.addWidget(self.cb_ch3, stretch=1)
@@ -153,13 +153,13 @@ class ColorTransformDialog(QDialog):
         layout.addWidget(self.grp_channels)
 
         # Options
-        self.chk_norm = QCheckBox("Normalize raw input channels to [0.0, 1.0] dynamic range")
+        self.chk_norm = QCheckBox(tr("color.chk_norm"))
         self.chk_norm.setChecked(True)
         layout.addWidget(self.chk_norm)
 
         # Output Name
         h_out = QHBoxLayout()
-        h_out.addWidget(QLabel("Output Layer Name:"))
+        h_out.addWidget(QLabel(tr("color.out_name")))
         self.txt_out_name = QLineEdit(f"{self.layer.name}_HSV")
         h_out.addWidget(self.txt_out_name)
         layout.addLayout(h_out)
@@ -206,21 +206,21 @@ class ColorTransformDialog(QDialog):
     def _on_mode_changed(self):
         mode = self.cb_mode.currentData()
         if mode == "HSV_TO_RGB":
-            self.lbl_ch1.setText("Hue Band (H):")
-            self.lbl_ch2.setText("Saturation Band (S):")
-            self.lbl_ch3.setText("Value Band (V):")
+            self.lbl_ch1.setText(tr("color.ch_h"))
+            self.lbl_ch2.setText(tr("color.ch_s"))
+            self.lbl_ch3.setText(tr("color.ch_v"))
             self.txt_out_name.setText(f"{self.layer.name}_RGB")
             self.chk_norm.setChecked(False)
         elif mode == "RGB_TO_GRAY":
-            self.lbl_ch1.setText("Red Band (R):")
-            self.lbl_ch2.setText("Green Band (G):")
-            self.lbl_ch3.setText("Blue Band (B):")
+            self.lbl_ch1.setText(tr("color.ch_r"))
+            self.lbl_ch2.setText(tr("color.ch_g"))
+            self.lbl_ch3.setText(tr("color.ch_b"))
             self.txt_out_name.setText(f"{self.layer.name}_Gray")
             self.chk_norm.setChecked(False)
         else:
-            self.lbl_ch1.setText("Red Band (R):")
-            self.lbl_ch2.setText("Green Band (G):")
-            self.lbl_ch3.setText("Blue Band (B):")
+            self.lbl_ch1.setText(tr("color.ch_r"))
+            self.lbl_ch2.setText(tr("color.ch_g"))
+            self.lbl_ch3.setText(tr("color.ch_b"))
             self.txt_out_name.setText(f"{self.layer.name}_HSV")
             self.chk_norm.setChecked(True)
 
@@ -255,4 +255,4 @@ class ColorTransformDialog(QDialog):
     def _on_failed(self, err: str):
         self.btn_ok.setEnabled(True)
         self.progress_bar.hide()
-        QMessageBox.critical(self, "Transform Failed", f"Color transform failed: {err}")
+        QMessageBox.critical(self, tr("dialog.error"), f"{tr('color.failed')}: {err}")

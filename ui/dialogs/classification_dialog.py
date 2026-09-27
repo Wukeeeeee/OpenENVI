@@ -46,7 +46,10 @@ class ClassificationDialog(QDialog):
 
         # Method
         self.cb_method = QComboBox()
-        self.cb_method.addItems(["K-Means (Unsupervised)", "ISODATA (Iterative Clustering)"])
+        self.cb_method.addItems([
+            tr("classification.method_kmeans"),
+            tr("classification.method_isodata"),
+        ])
         form.addRow(tr("dialog.classification.method"), self.cb_method)
 
         # Classes
@@ -100,4 +103,8 @@ class ClassificationDialog(QDialog):
             self.result_generated.emit(layer_name, thematic_rgb)
             self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Classification Failed", f"Error during classification:\n{e}")
+            QMessageBox.critical(
+                self,
+                tr("classification.err_title"),
+                f"{tr('classification.err_msg')}\n{e}",
+            )

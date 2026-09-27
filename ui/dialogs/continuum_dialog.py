@@ -102,22 +102,22 @@ class ContinuumRemovalDialog(QDialog):
         layout.setSpacing(10)
 
         # 1. Preview Graph Group
-        grp_preview = QGroupBox("Spectral Sample Preview (Center Pixel)")
+        grp_preview = QGroupBox(tr("continuum.grp_preview"))
         l_prev = QVBoxLayout(grp_preview)
 
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground("#1e1e1e")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.addLegend()
-        self.plot_widget.setLabel("bottom", "Band / Wavelength")
-        self.plot_widget.setLabel("left", "Reflectance")
+        self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_wavelength"))
+        self.plot_widget.setLabel("left", tr("spectral_profile.axis_y"))
         l_prev.addWidget(self.plot_widget)
 
         layout.addWidget(grp_preview, stretch=1)
 
         # 2. Output name
         h_out = QHBoxLayout()
-        h_out.addWidget(QLabel("Output Layer Name:"))
+        h_out.addWidget(QLabel(tr("continuum.out_name")))
         self.txt_out_name = QLineEdit(f"{self.layer.name}_ContinuumRemoved")
         h_out.addWidget(self.txt_out_name)
         layout.addLayout(h_out)
@@ -157,11 +157,11 @@ class ContinuumRemovalDialog(QDialog):
             cr, hull = continuum_removal_1d(spec, wl)
 
             # Plot original
-            self.plot_widget.plot(x, spec, pen=pg.mkPen("#e74c3c", width=2), name="Original Spectrum")
+            self.plot_widget.plot(x, spec, pen=pg.mkPen("#e74c3c", width=2), name=tr("continuum.legend_orig"))
             # Plot hull
-            self.plot_widget.plot(x, hull, pen=pg.mkPen("#f1c40f", width=1.5, style=Qt.DashLine), name="Convex Hull")
+            self.plot_widget.plot(x, hull, pen=pg.mkPen("#f1c40f", width=1.5, style=Qt.DashLine), name=tr("continuum.legend_hull"))
             # Plot CR
-            self.plot_widget.plot(x, cr, pen=pg.mkPen("#2ecc71", width=2), name="Continuum Removed")
+            self.plot_widget.plot(x, cr, pen=pg.mkPen("#2ecc71", width=2), name=tr("continuum.legend_cr"))
         except Exception:
             pass
 
@@ -187,4 +187,4 @@ class ContinuumRemovalDialog(QDialog):
     def _on_failed(self, err: str):
         self.btn_ok.setEnabled(True)
         self.progress_bar.hide()
-        QMessageBox.critical(self, "Processing Error", f"Continuum removal failed: {err}")
+        QMessageBox.critical(self, tr("dialog.error"), f"{tr('continuum.failed')}: {err}")

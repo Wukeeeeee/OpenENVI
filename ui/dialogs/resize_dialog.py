@@ -105,22 +105,22 @@ class ResizeDataDialog(QDialog):
         w, h = meta.width, meta.height
 
         # 1. Spatial Subset Group
-        grp_spatial = QGroupBox("Spatial Subset (Pixel Coordinates)")
+        grp_spatial = QGroupBox(tr("resize.grp_spatial"))
         layout_spatial = QVBoxLayout(grp_spatial)
 
         grid_coords = QHBoxLayout()
 
         # Samples (X)
         v_x = QVBoxLayout()
-        v_x.addWidget(QLabel("Samples (Width):"))
+        v_x.addWidget(QLabel(tr("resize.samples")))
         h_x = QHBoxLayout()
-        h_x.addWidget(QLabel("Start:"))
+        h_x.addWidget(QLabel(tr("resize.start")))
         self.sp_xmin = QSpinBox()
         self.sp_xmin.setRange(0, w - 1)
         self.sp_xmin.setValue(0)
         h_x.addWidget(self.sp_xmin)
 
-        h_x.addWidget(QLabel("End:"))
+        h_x.addWidget(QLabel(tr("resize.end")))
         self.sp_xmax = QSpinBox()
         self.sp_xmax.setRange(1, w)
         self.sp_xmax.setValue(w)
@@ -130,15 +130,15 @@ class ResizeDataDialog(QDialog):
 
         # Lines (Y)
         v_y = QVBoxLayout()
-        v_y.addWidget(QLabel("Lines (Height):"))
+        v_y.addWidget(QLabel(tr("resize.lines")))
         h_y = QHBoxLayout()
-        h_y.addWidget(QLabel("Start:"))
+        h_y.addWidget(QLabel(tr("resize.start")))
         self.sp_ymin = QSpinBox()
         self.sp_ymin.setRange(0, h - 1)
         self.sp_ymin.setValue(0)
         h_y.addWidget(self.sp_ymin)
 
-        h_y.addWidget(QLabel("End:"))
+        h_y.addWidget(QLabel(tr("resize.end")))
         self.sp_ymax = QSpinBox()
         self.sp_ymax.setRange(1, h)
         self.sp_ymax.setValue(h)
@@ -149,25 +149,25 @@ class ResizeDataDialog(QDialog):
         layout_spatial.addLayout(grid_coords)
 
         # Reset button
-        btn_reset = QPushButton("Reset to Full Scene")
+        btn_reset = QPushButton(tr("resize.btn_reset"))
         btn_reset.clicked.connect(self._reset_spatial)
         layout_spatial.addWidget(btn_reset)
 
         # Resample scale factor
         scale_box = QHBoxLayout()
-        scale_box.addWidget(QLabel("Resize Scale Factor:"))
+        scale_box.addWidget(QLabel(tr("resize.scale_factor")))
         self.cb_scale = QComboBox()
-        self.cb_scale.addItem("1.0x (Original Resolution)", 1.0)
-        self.cb_scale.addItem("0.5x (Downsample 2x)", 0.5)
-        self.cb_scale.addItem("0.25x (Downsample 4x)", 0.25)
-        self.cb_scale.addItem("2.0x (Upsample 2x)", 2.0)
+        self.cb_scale.addItem(tr("resize.scale_1"), 1.0)
+        self.cb_scale.addItem(tr("resize.scale_05"), 0.5)
+        self.cb_scale.addItem(tr("resize.scale_025"), 0.25)
+        self.cb_scale.addItem(tr("resize.scale_2"), 2.0)
         scale_box.addWidget(self.cb_scale)
         layout_spatial.addLayout(scale_box)
 
         layout.addWidget(grp_spatial)
 
         # 2. Spectral Subset Group
-        grp_spectral = QGroupBox("Spectral Subset (Select Bands to Keep)")
+        grp_spectral = QGroupBox(tr("resize.grp_spectral"))
         layout_spectral = QVBoxLayout(grp_spectral)
 
         self.list_bands = QListWidget()
@@ -187,11 +187,11 @@ class ResizeDataDialog(QDialog):
         layout_spectral.addWidget(self.list_bands)
 
         btn_spectral_bar = QHBoxLayout()
-        btn_all = QPushButton("Select All")
+        btn_all = QPushButton(tr("resize.btn_select_all"))
         btn_all.clicked.connect(self.list_bands.selectAll)
         btn_spectral_bar.addWidget(btn_all)
 
-        btn_clear = QPushButton("Clear All")
+        btn_clear = QPushButton(tr("resize.btn_clear_all"))
         btn_clear.clicked.connect(self.list_bands.clearSelection)
         btn_spectral_bar.addWidget(btn_clear)
         layout_spectral.addLayout(btn_spectral_bar)
@@ -200,7 +200,7 @@ class ResizeDataDialog(QDialog):
 
         # 3. Output Name
         out_bar = QHBoxLayout()
-        out_bar.addWidget(QLabel("Output Layer Name:"))
+        out_bar.addWidget(QLabel(tr("resize.out_name")))
         self.txt_out_name = QLineEdit(f"{self.layer.name}_Subset")
         out_bar.addWidget(self.txt_out_name)
         layout.addLayout(out_bar)
@@ -236,7 +236,11 @@ class ResizeDataDialog(QDialog):
     def _start_resize(self):
         selected_items = self.list_bands.selectedItems()
         if not selected_items:
-            QMessageBox.warning(self, "No Bands Selected", "Please select at least one spectral band.")
+            QMessageBox.warning(
+                self,
+                tr("resize.err_no_bands_title"),
+                tr("resize.err_no_bands_msg"),
+            )
             return
 
         selected_bands = [item.data(Qt.UserRole) for item in selected_items]
@@ -248,7 +252,11 @@ class ResizeDataDialog(QDialog):
         ymax = self.sp_ymax.value()
 
         if xmin >= xmax or ymin >= ymax:
-            QMessageBox.warning(self, "Invalid Bounds", "Start coordinate must be strictly less than End coordinate.")
+            QMessageBox.warning(
+                self,
+                tr("resize.err_bounds_title"),
+                tr("resize.err_bounds_msg"),
+            )
             return
 
         scale_factor = float(self.cb_scale.currentData())
@@ -281,4 +289,4 @@ class ResizeDataDialog(QDialog):
     def _on_failed(self, err: str):
         self.btn_ok.setEnabled(True)
         self.progress_bar.hide()
-        QMessageBox.critical(self, "Resize Failed", f"Failed to subset raster: {err}")
+        QMessageBox.critical(self, tr("dialog.error"), f"{tr('resize.err_failed')}: {err}")

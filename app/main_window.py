@@ -155,6 +155,11 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_zoom_fit = QAction("Fit", self)
         self.act_zoom_fit.triggered.connect(self.main_view.zoom_fit)
 
+        self.act_toggle_overview = QAction(tr("main_view.overview_toggle"), self)
+        self.act_toggle_overview.setCheckable(True)
+        self.act_toggle_overview.setChecked(True)
+        self.act_toggle_overview.toggled.connect(self.main_view.set_overview_visible)
+
         # Layer Actions
         self.act_layer_props = QAction("Layer Properties...", self)
         self.act_remove_layer = QAction("Remove Active Layer", self)
@@ -212,6 +217,9 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_reset_layout = QAction("Reset Dock Layout", self)
         self.act_reset_layout.triggered.connect(self._reset_dock_layout)
 
+        self.act_shortcuts = QAction("User Guide & Shortcuts...", self)
+        self.act_shortcuts.triggered.connect(self._on_shortcuts)
+
         self.act_about = QAction("About OpenENVI", self)
         self.act_about.triggered.connect(self._on_about)
 
@@ -254,6 +262,8 @@ class OpenENVIMainWindow(QMainWindow):
         self.menu_view.addAction(self.dock_data_manager.toggleViewAction())
         self.menu_view.addAction(self.dock_toolbox.toggleViewAction())
         self.menu_view.addAction(self.dock_spectral_profile.toggleViewAction())
+        self.menu_view.addSeparator()
+        self.menu_view.addAction(self.act_toggle_overview)
 
         # Layer Menu
         self.menu_layer = mb.addMenu("&Layer")
@@ -294,6 +304,8 @@ class OpenENVIMainWindow(QMainWindow):
 
         # Help Menu
         self.menu_help = mb.addMenu("&Help")
+        self.menu_help.addAction(self.act_shortcuts)
+        self.menu_help.addSeparator()
         self.menu_help.addAction(self.act_about)
 
     def _init_toolbar(self) -> None:
@@ -340,6 +352,9 @@ class OpenENVIMainWindow(QMainWindow):
         self.dock_layer_manager.layer_visibility_changed.connect(self._on_layer_visibility_changed)
         self.dock_layer_manager.layer_removed.connect(self._on_layer_removed)
         self.dock_layer_manager.export_layer_requested.connect(self.show_export_dialog)
+        self.dock_layer_manager.roi_tool_requested.connect(self.show_roi_dialog)
+        self.dock_layer_manager.roi_visibility_changed.connect(self._on_roi_visibility_changed)
+        self.dock_layer_manager.roi_removed.connect(self._on_roi_removed)
         event_bus.layer_changed.connect(self._on_active_layer_changed)
 
         # Toolbox double click -> Launch tool
@@ -399,7 +414,25 @@ class OpenENVIMainWindow(QMainWindow):
             return layer
         except Exception as e:
             if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
-                QMessageBox.critical(self, "Open Image Error", f"Failed to open image:\n{e}")
+                if "allocate" in str(e).lower() or "memory" in str(e).lower() or isinstance(e, MemoryError):
+                    msg = (
+                        "打开遥感影像失败：系统连续物理内存不足 (无法分配所需连续内存空间)。\n\n"
+                        "原因分析：当前遥感影像尺寸巨大（单波段数千万像元），且当前操作系统可用连续物理内存较低。\n\n"
+                        "建议解决方案：\n"
+                        "1. 在左侧「图层管理器」中右键移除不需要的旧图层，释放内存空间；\n"
+                        "2. 关闭后台高内存占用软件（如浏览器多标签、大型工程软件等）；\n"
+                        "3. 调大 Windows 系统的虚拟内存（分页文件 Pagefile）。"
+                        if i18n.current_language == "zh"
+                        else f"Failed to open image: Insufficient system memory (Out of Memory).\n\n"
+                             f"Details: {e}\n\n"
+                             f"Suggestions:\n"
+                             f"1. Remove unused layers from Layer Manager to free up memory;\n"
+                             f"2. Close other memory-intensive applications;\n"
+                             f"3. Increase Windows virtual memory (pagefile) size."
+                    )
+                    QMessageBox.critical(self, tr("dialog.error"), msg)
+                else:
+                    QMessageBox.critical(self, tr("dialog.error"), f"Failed to open image:\n{e}")
             return None
 
     def add_derived_layer(
@@ -456,6 +489,7 @@ class OpenENVIMainWindow(QMainWindow):
         self.dock_layer_manager.update_layer_display_mode(layer_id, "grayscale")
 
         self.main_view.display_raster(band_data, reset_view=False)
+        self.main_view.redraw_rois(getattr(layer, "rois", []))
         event_bus.status_message.emit(f"Displaying: {layer.name} [Band {band_idx + 1}]", 2000)
 
     @Slot(str, int, int, int)
@@ -464,10 +498,33 @@ class OpenENVIMainWindow(QMainWindow):
         if layer_id not in self._readers:
             return
         reader = self._readers[layer_id]
-        r_band = reader.read_band(r)
-        g_band = reader.read_band(g)
-        b_band = reader.read_band(b)
-        rgb_cube = np.stack([r_band, g_band, b_band], axis=-1)
+        meta = reader.metadata
+        h, w = meta.height, meta.width
+
+        try:
+            # Preallocate 3D cube directly to avoid holding 3 full separate bands + 1 stacked cube simultaneously
+            rgb_cube = np.empty((h, w, 3), dtype=np.float32)
+            rgb_cube[..., 0] = reader.read_band(r)
+            rgb_cube[..., 1] = reader.read_band(g)
+            rgb_cube[..., 2] = reader.read_band(b)
+        except (MemoryError, Exception) as e:
+            if "allocate" in str(e).lower() or "memory" in str(e).lower() or isinstance(e, MemoryError):
+                import gc
+                gc.collect()
+                msg = (
+                    "系统可用物理内存不足以分配 3 个波段的超大 RGB 彩色合成图。\n"
+                    "已自动为您降级加载单波段灰度显示以节约连续内存。\n\n"
+                    "建议：在左侧图层管理器中移除不需要的旧图层以释放内存。"
+                    if i18n.current_language == "zh"
+                    else "System RAM is insufficient to allocate full 3-band RGB composite.\n"
+                         "Falling back to single band grayscale display to conserve memory.\n"
+                         "Tip: Remove unused layers from Layer Manager to free up RAM."
+                )
+                if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                    QMessageBox.warning(self, tr("dialog.warning"), msg)
+                self.load_grayscale_band(layer_id, r)
+                return
+            raise
 
         self._active_layer_id = layer_id
         layer = self._layers[layer_id]
@@ -476,6 +533,7 @@ class OpenENVIMainWindow(QMainWindow):
         self.dock_layer_manager.update_layer_display_mode(layer_id, "rgb")
 
         self.main_view.display_raster(rgb_cube, reset_view=False)
+        self.main_view.redraw_rois(getattr(layer, "rois", []))
         event_bus.status_message.emit(
             f"Displaying: {layer.name} [RGB: {r+1}, {g+1}, {b+1}]", 2000
         )
@@ -484,6 +542,31 @@ class OpenENVIMainWindow(QMainWindow):
         """Handle layer activation from Layer Manager."""
         if layer_id in self._layers:
             self._active_layer_id = layer_id
+            layer = self._layers[layer_id]
+            self.main_view.redraw_rois(getattr(layer, "rois", []))
+
+    def _on_roi_visibility_changed(self, layer_id: str, roi_id: str, is_visible: bool) -> None:
+        """Toggle individual ROI visibility from Layer Manager."""
+        if layer_id in self._layers:
+            layer = self._layers[layer_id]
+            for roi in getattr(layer, "rois", []):
+                if roi.roi_id == roi_id:
+                    roi.is_visible = is_visible
+                    break
+            if self._active_layer_id == layer_id:
+                self.main_view.redraw_rois(getattr(layer, "rois", []))
+
+    def _on_roi_removed(self, layer_id: str, roi_id: str) -> None:
+        """Delete ROI from Layer Manager."""
+        if layer_id in self._layers:
+            layer = self._layers[layer_id]
+            if hasattr(layer, "rois"):
+                layer.rois = [r for r in layer.rois if r.roi_id != roi_id]
+            if self._active_layer_id == layer_id:
+                self.main_view.redraw_rois(getattr(layer, "rois", []))
+            if hasattr(self, "_roi_dialog") and self._roi_dialog is not None and self._roi_dialog.isVisible():
+                if getattr(self._roi_dialog, "layer", None) == layer:
+                    self._roi_dialog._refresh_table()
 
     def _on_layer_visibility_changed(self, layer_id: str, is_visible: bool) -> None:
         """Toggle layer visibility."""
@@ -513,6 +596,9 @@ class OpenENVIMainWindow(QMainWindow):
             del self._readers[layer_id]
         if layer_id in self._layers:
             del self._layers[layer_id]
+
+        import gc
+        gc.collect()
 
         # Sync docks
         self.dock_layer_manager.remove_layer_by_id(layer_id)
@@ -546,7 +632,8 @@ class OpenENVIMainWindow(QMainWindow):
 
         reader = self._readers[self._active_layer_id]
         geo_x, geo_y = reader.pixel_to_geo(x, y)
-        self.status_bar.update_geo_coords(geo_y, geo_x)
+        crs_str = reader.metadata.crs if hasattr(reader, "metadata") and reader.metadata else None
+        self.status_bar.update_geo_coords(geo_x, geo_y, crs_str=crs_str)
 
         # Read active pixel values
         try:
@@ -735,24 +822,44 @@ class OpenENVIMainWindow(QMainWindow):
         dlg.result_generated.connect(self.add_derived_layer)
         dlg.exec()
 
-    def show_roi_dialog(self) -> None:
+    def show_roi_dialog(self, target_layer_id: Optional[str] = None) -> None:
         """Open ROI Tool dialog with interactive polygon canvas drawing (modeless)."""
-        if not self._active_layer_id:
+        layer_id = target_layer_id if (target_layer_id and target_layer_id in self._layers) else self._active_layer_id
+        if not layer_id or layer_id not in self._layers:
             QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
             return
         if hasattr(self, "_roi_dialog") and self._roi_dialog is not None and self._roi_dialog.isVisible():
-            self._roi_dialog.raise_()
-            self._roi_dialog.activateWindow()
-            return
+            if getattr(self._roi_dialog, "layer", None) != self._layers[layer_id]:
+                self._roi_dialog.close()
+            else:
+                self._roi_dialog.raise_()
+                self._roi_dialog.activateWindow()
+                return
+
+        layer = self._layers[layer_id]
+        reader = self._readers[layer_id]
         self._roi_dialog = ROIToolDialog(
-            layer=self._layers[self._active_layer_id],
-            reader=self._readers[self._active_layer_id],
+            layer=layer,
+            reader=reader,
             main_view=self.main_view,
             parent=self,
         )
-        self._roi_dialog.plot_mean_spectrum_requested.connect(self.dock_spectral_profile.add_spectrum_overlay)
+        self._roi_dialog.plot_mean_spectrum_requested.connect(self._on_roi_plot_mean_spectrum)
         self._roi_dialog.mask_generated.connect(self.add_derived_layer)
+        self._roi_dialog.roi_updated.connect(lambda: self.dock_layer_manager.sync_layer_rois(layer))
         self._roi_dialog.show()
+
+    def _on_roi_plot_mean_spectrum(
+        self,
+        values: np.ndarray,
+        wavelengths: Optional[np.ndarray],
+        name: str,
+        color: str,
+    ) -> None:
+        """Display ROI mean spectrum in Spectral Profile dock and bring dock to front."""
+        self.dock_spectral_profile.show()
+        self.dock_spectral_profile.raise_()
+        self.dock_spectral_profile.add_spectrum_overlay(values, wavelengths, name, color)
 
     def show_stats_dialog(self) -> None:
         """Open Quick Statistics dialog for active layer."""
@@ -879,9 +986,11 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_zoom_in.setText(tr("action.zoom_in"))
         self.act_zoom_out.setText(tr("action.zoom_out"))
         self.act_zoom_fit.setText(tr("action.fit"))
+        self.act_toggle_overview.setText(tr("main_view.overview_toggle"))
         self.act_layer_props.setText(tr("action.layer_props"))
         self.act_remove_layer.setText(tr("action.remove_layer"))
         self.act_reset_layout.setText(tr("action.reset_layout"))
+        self.act_shortcuts.setText(tr("action.shortcuts"))
         self.act_about.setText(tr("action.about"))
 
         # Tools Menu Actions
@@ -968,6 +1077,14 @@ class OpenENVIMainWindow(QMainWindow):
         self.dock_data_manager.show()
         self.dock_toolbox.show()
         self.dock_spectral_profile.show()
+
+    def _on_shortcuts(self) -> None:
+        """Show User Guide & Keyboard Shortcuts Dialog."""
+        QMessageBox.information(
+            self,
+            tr("app.shortcuts_title"),
+            tr("app.shortcuts_desc"),
+        )
 
     def _on_about(self) -> None:
         """Show About Dialog."""

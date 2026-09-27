@@ -206,7 +206,7 @@ class ToolboxDock(QDockWidget):
         if is_implemented is False:
             from core.i18n import tr
             msg = f"{item.text(0)}: {tr('toolbox.msg_not_implemented')}"
-            event_bus.status_message.emit(f"⚠️ {msg}", 3000)
+            event_bus.status_message.emit(f"{msg}", 3000)
             return
 
         self.tool_selected.emit(tool_name)

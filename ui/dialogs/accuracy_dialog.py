@@ -57,19 +57,19 @@ class AccuracyAssessmentDialog(QDialog):
         layout.setSpacing(10)
 
         # 1. Layer Selection Group
-        grp_layers = QGroupBox("Input Datasets")
+        grp_layers = QGroupBox(tr("accuracy.grp_layers"))
         l_inputs = QVBoxLayout(grp_layers)
 
         # Classified layer
         h_cls = QHBoxLayout()
-        h_cls.addWidget(QLabel("Classified Map:"))
+        h_cls.addWidget(QLabel(tr("accuracy.classified")))
         self.cb_classified = QComboBox()
         h_cls.addWidget(self.cb_classified, stretch=1)
         l_inputs.addLayout(h_cls)
 
         # Reference layer
         h_ref = QHBoxLayout()
-        h_ref.addWidget(QLabel("Ground Truth / Reference:"))
+        h_ref.addWidget(QLabel(tr("accuracy.reference")))
         self.cb_reference = QComboBox()
         h_ref.addWidget(self.cb_reference, stretch=1)
         l_inputs.addLayout(h_ref)
@@ -78,19 +78,19 @@ class AccuracyAssessmentDialog(QDialog):
         layout.addWidget(grp_layers)
 
         # Compute button
-        self.btn_compute = QPushButton("Compute Confusion Matrix & Accuracy")
+        self.btn_compute = QPushButton(tr("accuracy.btn_compute"))
         self.btn_compute.setStyleSheet("background-color: #3498db; color: white; font-weight: bold; padding: 6px;")
         self.btn_compute.clicked.connect(self._compute_accuracy)
         layout.addWidget(self.btn_compute)
 
         # 2. Summary stats labels
-        grp_summary = QGroupBox("Accuracy Metrics")
+        grp_summary = QGroupBox(tr("accuracy.grp_metrics"))
         l_summ = QHBoxLayout(grp_summary)
-        self.lbl_oa = QLabel("Overall Accuracy: --")
+        self.lbl_oa = QLabel(tr("accuracy.oa_idle"))
         self.lbl_oa.setStyleSheet("font-size: 14px; font-weight: bold; color: #2ecc71;")
         l_summ.addWidget(self.lbl_oa)
 
-        self.lbl_kappa = QLabel("Kappa Coefficient: --")
+        self.lbl_kappa = QLabel(tr("accuracy.kappa_idle"))
         self.lbl_kappa.setStyleSheet("font-size: 14px; font-weight: bold; color: #f1c40f;")
         l_summ.addWidget(self.lbl_kappa)
         layout.addWidget(grp_summary)
@@ -101,7 +101,7 @@ class AccuracyAssessmentDialog(QDialog):
 
         # Action Buttons
         btn_bar = QHBoxLayout()
-        self.btn_export = QPushButton("Export Report (TXT/CSV)...")
+        self.btn_export = QPushButton(tr("accuracy.btn_export"))
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_report)
         btn_bar.addWidget(self.btn_export)
@@ -133,7 +133,11 @@ class AccuracyAssessmentDialog(QDialog):
         ref_id = self.cb_reference.currentData()
 
         if not cls_id or not ref_id:
-            QMessageBox.warning(self, "Selection Error", "Please select both a classified layer and a reference layer.")
+            QMessageBox.warning(
+                self,
+                tr("accuracy.err_selection_title"),
+                tr("accuracy.err_selection_msg"),
+            )
             return
 
         cls_layer, cls_reader = self.layers[cls_id]
@@ -151,13 +155,13 @@ class AccuracyAssessmentDialog(QDialog):
             res = compute_confusion_matrix(c_data, r_data)
             self._accuracy_result = res
 
-            self.lbl_oa.setText(f"Overall Accuracy: {res['overall_accuracy']:.2f}%")
-            self.lbl_kappa.setText(f"Kappa Coefficient: {res['kappa']:.4f}")
+            self.lbl_oa.setText(f"{tr('accuracy.oa')} {res['overall_accuracy']:.2f}%")
+            self.lbl_kappa.setText(f"{tr('accuracy.kappa')} {res['kappa']:.4f}")
             self.btn_export.setEnabled(True)
 
             self._display_matrix(res)
         except Exception as e:
-            QMessageBox.critical(self, "Calculation Error", f"Failed to compute accuracy: {e}")
+            QMessageBox.critical(self, tr("dialog.error"), f"{tr('accuracy.err_compute')}: {e}")
 
     def _display_matrix(self, res: Dict):
         matrix = res["matrix"]
@@ -165,7 +169,7 @@ class AccuracyAssessmentDialog(QDialog):
         k = len(classes)
 
         # Columns: Class, C_0, C_1, ..., Total, PA (%)
-        col_headers = ["Ref \\ Pred"] + [f"C_{c}" for c in classes] + ["Total", "PA (%)"]
+        col_headers = [tr("accuracy.col_ref_pred")] + [f"C_{c}" for c in classes] + [tr("accuracy.col_total"), tr("accuracy.col_pa")]
         self.table.setColumnCount(len(col_headers))
         self.table.setHorizontalHeaderLabels(col_headers)
         self.table.setRowCount(k + 1)  # +1 for UA row
@@ -176,7 +180,7 @@ class AccuracyAssessmentDialog(QDialog):
         ua = res["users_accuracy"]
 
         for r_idx, cls_val in enumerate(classes):
-            self.table.setItem(r_idx, 0, QTableWidgetItem(f"Class {cls_val}"))
+            self.table.setItem(r_idx, 0, QTableWidgetItem(f"{tr('accuracy.class_prefix')} {cls_val}"))
             for c_idx in range(k):
                 val = matrix[r_idx, c_idx]
                 item = QTableWidgetItem(str(val))
@@ -189,7 +193,7 @@ class AccuracyAssessmentDialog(QDialog):
 
         # User's accuracy row
         ua_row = k
-        self.table.setItem(ua_row, 0, QTableWidgetItem("UA (%)"))
+        self.table.setItem(ua_row, 0, QTableWidgetItem(tr("accuracy.col_ua")))
         for c_idx, cls_val in enumerate(classes):
             self.table.setItem(ua_row, c_idx + 1, QTableWidgetItem(f"{ua[cls_val]:.2f}%"))
         self.table.setItem(ua_row, k + 1, QTableWidgetItem(str(np.sum(matrix))))
@@ -203,7 +207,7 @@ class AccuracyAssessmentDialog(QDialog):
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Accuracy Assessment Report",
+            tr("accuracy.save_title"),
             "accuracy_report.txt",
             "Text Files (*.txt);;CSV Files (*.csv)",
         )
@@ -213,6 +217,10 @@ class AccuracyAssessmentDialog(QDialog):
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(self._accuracy_result["report"])
-            QMessageBox.information(self, "Export Successful", f"Report saved to:\n{file_path}")
+            QMessageBox.information(
+                self,
+                tr("accuracy.export_success_title"),
+                f"{tr('accuracy.export_success_msg')}\n{file_path}",
+            )
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Could not save report: {e}")
+            QMessageBox.critical(self, tr("dialog.error"), f"{tr('accuracy.export_err_msg')}: {e}")

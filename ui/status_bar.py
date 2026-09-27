@@ -19,7 +19,8 @@ class OpenENVIStatusBar(QStatusBar):
         self.setObjectName("OpenENVIStatusBar")
 
         # Status & Message Label (left-aligned)
-        self._lbl_status = QLabel("Ready")
+        from core.i18n import tr
+        self._lbl_status = QLabel(tr("app.ready"))
         self._lbl_status.setStyleSheet("color: #8e9297; font-weight: 500;")
         self.addWidget(self._lbl_status, stretch=1)
 
@@ -86,14 +87,64 @@ class OpenENVIStatusBar(QStatusBar):
         prefix = tr("status.prefix_probe")
         self._lbl_file_coords.setText(f"{prefix}: ({x}, {y})")
 
-    def update_geo_coords(self, lat: Optional[float], lon: Optional[float]) -> None:
-        """Update geospatial coordinates."""
+    def update_geo_coords(
+        self,
+        geo_x: Optional[float],
+        geo_y: Optional[float],
+        crs_str: Optional[str] = None,
+    ) -> None:
+        """Update geospatial coordinates in status bar.
+
+        Properly formats projected (X/Easting, Y/Northing in meters) vs
+        geographic (Lon, Lat in degrees), and converts projected coords to WGS84 Lat/Lon.
+        """
         from core.i18n import tr
         prefix = tr("status.prefix_geo")
-        if lat is not None and lon is not None:
-            self._lbl_geo_coords.setText(f"{prefix}: ({lat:.6f}, {lon:.6f})")
-        else:
+        if geo_x is None or geo_y is None:
             self._lbl_geo_coords.setText(f"{prefix}: N/A")
+            return
+
+        is_geo = False
+        lat_wgs: Optional[float] = None
+        lon_wgs: Optional[float] = None
+
+        if crs_str:
+            try:
+                from pyproj import CRS, Transformer
+                crs = CRS.from_user_input(crs_str)
+                if crs.is_geographic:
+                    is_geo = True
+                    lon_wgs, lat_wgs = float(geo_x), float(geo_y)
+                else:
+                    is_geo = False
+                    transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+                    t_lon, t_lat = transformer.transform(geo_x, geo_y)
+                    lon_wgs, lat_wgs = float(t_lon), float(t_lat)
+            except Exception:
+                is_geo = abs(geo_x) <= 180.0 and abs(geo_y) <= 90.0
+                if is_geo:
+                    lon_wgs, lat_wgs = float(geo_x), float(geo_y)
+        else:
+            is_geo = abs(geo_x) <= 180.0 and abs(geo_y) <= 90.0
+            if is_geo:
+                lon_wgs, lat_wgs = float(geo_x), float(geo_y)
+
+        if is_geo and lon_wgs is not None and lat_wgs is not None:
+            ns = "N" if lat_wgs >= 0 else "S"
+            ew = "E" if lon_wgs >= 0 else "W"
+            self._lbl_geo_coords.setText(
+                f"{prefix}: {abs(lon_wgs):.6f}°{ew}, {abs(lat_wgs):.6f}°{ns}"
+            )
+        elif lat_wgs is not None and lon_wgs is not None and (-90.0 <= lat_wgs <= 90.0 and -180.0 <= lon_wgs <= 180.0):
+            ns = "N" if lat_wgs >= 0 else "S"
+            ew = "E" if lon_wgs >= 0 else "W"
+            self._lbl_geo_coords.setText(
+                f"{prefix}: X: {geo_x:.2f}  Y: {geo_y:.2f} | {abs(lat_wgs):.4f}°{ns}, {abs(lon_wgs):.4f}°{ew}"
+            )
+        else:
+            self._lbl_geo_coords.setText(
+                f"{prefix}: X: {geo_x:.2f}  Y: {geo_y:.2f}"
+            )
 
     def update_pixel_values(self, values: List[float]) -> None:
         """Update spectral band values display."""
@@ -117,4 +168,5 @@ class OpenENVIStatusBar(QStatusBar):
         self._lbl_status.setText(message)
         if timeout > 0:
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(timeout, lambda: self._lbl_status.setText("Ready"))
+            from core.i18n import tr
+            QTimer.singleShot(timeout, lambda: self._lbl_status.setText(tr("app.ready")))

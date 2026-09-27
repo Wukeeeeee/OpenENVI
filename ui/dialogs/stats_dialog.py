@@ -114,8 +114,8 @@ class QuickStatsDialog(QDialog):
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground("#1e1e1e")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setLabel("bottom", "Pixel Value / DN")
-        self.plot_widget.setLabel("left", "Frequency / Count")
+        self.plot_widget.setLabel("bottom", tr("stats.axis_x"))
+        self.plot_widget.setLabel("left", tr("stats.axis_y"))
         hist_layout.addWidget(self.plot_widget)
 
         splitter.addWidget(hist_container)
@@ -124,7 +124,7 @@ class QuickStatsDialog(QDialog):
 
         # Button Bar
         btn_bar = QHBoxLayout()
-        self.btn_export = QPushButton("Export Report (CSV)...")
+        self.btn_export = QPushButton(tr("stats.btn_export"))
         self.btn_export.clicked.connect(self._export_report)
         btn_bar.addWidget(self.btn_export)
 
@@ -161,7 +161,7 @@ class QuickStatsDialog(QDialog):
 
     def _on_computation_failed(self, err_msg: str):
         self.progress_bar.hide()
-        QMessageBox.critical(self, "Stats Error", f"Failed to compute statistics: {err_msg}")
+        QMessageBox.critical(self, tr("dialog.error"), f"{tr('stats.err_compute')}: {err_msg}")
 
     def _on_row_selected(self):
         selected_rows = self.table.selectionModel().selectedRows()
@@ -187,14 +187,14 @@ class QuickStatsDialog(QDialog):
             brush=(52, 152, 219, 80),
         )
         self.plot_widget.addItem(curve)
-        self.plot_widget.setTitle(f"Histogram: {s['band_name']}")
+        self.plot_widget.setTitle(f"{tr('display.histogram')}: {s['band_name']}")
 
     def _export_report(self):
         if not self._stats_results:
             return
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Export Statistics Report",
+            tr("stats.btn_export"),
             f"{self.layer.name}_statistics.csv",
             "CSV Files (*.csv);;Text Files (*.txt)",
         )
@@ -206,6 +206,6 @@ class QuickStatsDialog(QDialog):
                 f.write("Band,Min,Max,Mean,StdDev,PixelCount\n")
                 for s in self._stats_results:
                     f.write(f'"{s["band_name"]}",{s["min"]:.6f},{s["max"]:.6f},{s["mean"]:.6f},{s["std"]:.6f},{s["count"]}\n')
-            QMessageBox.information(self, "Export Successful", f"Report saved to:\n{file_path}")
+            QMessageBox.information(self, tr("dialog.export.success_title"), f"{tr('dialog.export.success_msg')}\n{file_path}")
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Could not write file: {e}")
+            QMessageBox.critical(self, tr("dialog.error"), f"{tr('stats.err_write')}: {e}")

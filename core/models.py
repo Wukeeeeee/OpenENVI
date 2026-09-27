@@ -73,3 +73,5 @@ class RasterLayer:
     is_visible: bool = True
     display_mode: str = "grayscale"  # "grayscale" or "rgb"
     active_bands: Tuple[int, ...] = (0,)  # (gray,) or (r, g, b)
+    rois: list = field(default_factory=list)
+

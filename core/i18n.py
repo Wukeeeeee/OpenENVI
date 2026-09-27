@@ -16,9 +16,31 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "app.initialized": "OpenENVI initialized successfully",
         "app.about_title": "About OpenENVI",
         "app.about_desc": (
-            "<h3>OpenENVI Remote Sensing Platform</h3>"
-            "<p>A lightweight, open-source ENVI-style remote sensing and hyperspectral image analysis platform.</p>"
-            "<p><b>Phase 0: Project Scaffolding & Modular UI Shell</b></p>"
+            "<h3>OpenENVI Remote Sensing Workspace v1.0</h3>"
+            "<p>Open-source, high-performance hyperspectral and multispectral remote sensing image processing workspace modeled after ENVI workflows.</p>"
+            "<p><b>Supported Formats:</b> ENVI Standard (.hdr/.dat/.raw/.bsq/.bil/.bip), GeoTIFF, Landsat 8/9 Level-1</p>"
+            "<p><b>Key Capabilities:</b> Interactive multi-polygon ROI analysis, Z-Profile spectral curve probing, Band Math, Spectral Indices, PCA, Supervised/Unsupervised Classification, Radiometric Calibration, and Layer Stacking.</p>"
+            "<p>Developed with PySide6, PyQtGraph, NumPy, and Rasterio.</p>"
+        ),
+        "action.shortcuts": "User Guide & Shortcuts...",
+        "app.shortcuts_title": "OpenENVI User Guide & Shortcuts",
+        "app.shortcuts_desc": (
+            "<h3>OpenENVI Operation Guide & Shortcuts</h3>"
+            "<table border='1' cellspacing='0' cellpadding='4' style='border-color: #555; border-collapse: collapse;'>"
+            "<tr><th>Operation</th><th>Method / Shortcut</th></tr>"
+            "<tr><td>Open Raster</td><td>Ctrl+O</td></tr>"
+            "<tr><td>Export Raster</td><td>Ctrl+Shift+E</td></tr>"
+            "<tr><td>Save View Image</td><td>Ctrl+Shift+S</td></tr>"
+            "<tr><td>Zoom View</td><td>Mouse Wheel or Ctrl++ / Ctrl+-</td></tr>"
+            "<tr><td>Fit Window</td><td>Toolbar 'Fit' button</td></tr>"
+            "<tr><td>Pan Canvas</td><td>Middle Mouse Drag or Spacebar + Left Drag</td></tr>"
+            "<tr><td>Pixel Spectral Probe</td><td>Left-click on raster pixel to probe Z-Profile curve</td></tr>"
+            "<tr><td>ROI Add Nodes</td><td>Left-click continuously to add vertices (unlimited nodes)</td></tr>"
+            "<tr><td>ROI Close Polygon</td><td>Right-click to close current polygon (3+ nodes)</td></tr>"
+            "<tr><td>ROI Undo / Cancel</td><td>Backspace or Z to undo node; Esc to cancel polygon</td></tr>"
+            "<tr><td>ROI Delete</td><td>Delete key in ROI Tool table or right-click in Layer Manager</td></tr>"
+            "<tr><td>Reset Layout</td><td>Window menu -> Reset Dock Layout</td></tr>"
+            "</table>"
         ),
 
         # Menu Titles
@@ -72,11 +94,17 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "data_manager.rb_gray": "Gray Scale",
         "data_manager.rb_rgb": "RGB Color",
         "data_manager.rgb_group": "RGB Assignment",
+        "data_manager.slot_r": "R: Red",
+        "data_manager.slot_g": "G: Green",
+        "data_manager.slot_b": "B: Blue",
+        "data_manager.hint_rgb_target": "Click R/G/B slot to switch target, then click a band to assign",
         "data_manager.btn_load_band": "Load Band",
         "data_manager.btn_load_rgb": "Load RGB",
         "data_manager.btn_close_file": "Close File",
         "data_manager.msg_select_band": "Please select a band first",
         "data_manager.msg_assign_rgb": "Please assign all R, G, and B bands",
+        "data_manager.msg_loading_gray": "Loading Grayscale Band",
+        "data_manager.msg_loading_rgb": "Loading RGB Composite",
         "data_manager.msg_file_closed": "Dataset closed",
 
         # Toolbox Dock
@@ -124,7 +152,10 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "spectral_profile.loaded": "Spectrum Loaded",
         "spectral_profile.btn_clear": "Clear",
         "spectral_profile.axis_x_band": "Band Number",
-        "spectral_profile.axis_x_wavelength": "Band / Wavelength",
+        "spectral_profile.axis_x_wavelength": "Wavelength",
+        "spectral_profile.mode_band": "Band Number",
+        "spectral_profile.mode_wavelength": "Wavelength (nm)",
+        "spectral_profile.lbl_mode": "X-Axis: ",
         "spectral_profile.axis_y": "Value / Reflectance",
         "spectral_profile.info_idle": "Position: (-, -) | Spectrum: No pixel selected",
         "spectral_profile.info_loaded": "Position: ({x}, {y}) | Spectrum Loaded",
@@ -132,6 +163,9 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
 
         # Main View & Overview
         "main_view.overview": "Overview",
+        "main_view.overview_toggle": "Eagle-Eye Overview",
+        "main_view.overview_minimize": "Minimize Overview",
+        "main_view.overview_restore": "Restore Overview",
 
         # Status Bar
         "status.file_coords": "File: --, --",
@@ -205,6 +239,9 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.synthetic.samples": "Samples (Width):",
         "dialog.synthetic.bands": "Number of Bands:",
         "dialog.synthetic.noise": "Gaussian Noise (SNR):",
+        "dialog.synthetic.file_format": "File Format:",
+        "dialog.synthetic.output_dir": "Output Directory:",
+        "dialog.btn_browse": "Browse...",
         "dialog.synthetic.btn_generate": "Generate & Load Dataset",
 
         # Export Raster
@@ -271,12 +308,193 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.radiometry.grp_params": "Calibration Parameters",
         "dialog.radiometry.mtl_detected": "Detected USGS Landsat MTL Metadata Parameters",
         "dialog.radiometry.custom_notice": "Generic raster: Enter gain, offset, and sun elevation manually.",
+        "dialog.radiometry.multiplier": "Scale Multiplier (Gain / M):",
+        "dialog.radiometry.offset": "Additive Offset (Bias / A):",
+        "dialog.radiometry.sun_elevation": "Sun Elevation Angle (Degrees):",
         "dialog.radiometry.btn_calibrate": "Execute Calibration",
 
         # ROI Polygon
         "dialog.roi.btn_draw_poly": "Draw Polygon ROI",
         "dialog.roi.draw_mode_title": "Polygon Drawing Mode",
-        "dialog.roi.draw_mode_tip": "Interactive Drawing Activated:\n• Left-click on canvas to add vertices\n• Move cursor to preview edges\n• Right-click or double-click to close polygon",
+        "dialog.roi.draw_mode_tip": "Interactive Drawing Activated:\n- Left-click on canvas to add vertices\n- Move cursor to preview edges\n- Right-click to close polygon",
+        "dialog.roi.col_polys": "Polygons",
+        "dialog.roi.col_color": "Color",
+        "dialog.roi.btn_draw": "Draw Polygon",
+        "dialog.roi.btn_stop": "Stop Drawing",
+        "dialog.roi.btn_new_class": "New Class",
+        "dialog.roi.btn_undo_poly": "Undo Polygon",
+        "dialog.roi.btn_delete_class": "Delete Class",
+        "dialog.roi.btn_change_color": "Change Color",
+        "dialog.roi.btn_save_rois": "Export ROIs...",
+        "dialog.roi.btn_load_rois": "Import ROIs...",
+        "dialog.roi.btn_create_mask": "Generate Mask Layer",
+        "dialog.roi.tip_status": "Select an ROI class and click [Draw Polygon]. Left-click to add nodes, right-click to close.",
+        "dialog.roi.color_picker_title": "Select ROI Color",
+        "dialog.roi.stats_multiband_title": "ROI Multi-band Statistics",
+        "dialog.roi.stats_summary": "ROI Multi-band Statistics: {name} ({count} pixels)",
+        "dialog.roi.msg_class_created": "Created new class [{name}]. Click [Draw Polygon] to add shapes to this class.",
+        "dialog.roi.msg_class_deleted": "Deleted class [{name}].",
+        "dialog.roi.msg_undo_poly": "Undid last polygon for [{name}] ({count} remaining).",
+        "dialog.roi.msg_no_undo": "No polygons to undo in [{name}].",
+        "dialog.roi.err_no_canvas": "Main canvas viewport is not connected.",
+        "dialog.roi.msg_stopped": "Drawing mode stopped. Click Draw Polygon at any time to resume.",
+        "dialog.roi.msg_drawing": "[Drawing - {name}] Left-click to add nodes, right-click to close.",
+        "dialog.roi.msg_poly_added": "Successfully added polygon #{count} to [{name}]! Continue adding more or click [New Class].",
+        "dialog.roi.err_select_class": "Please select an ROI class from the table first.",
+        "dialog.roi.err_stats_failed": "Failed to compute multi-band statistics:",
+        "dialog.roi.msg_stats_done": "Completed multi-band statistical analysis for [{name}].",
+        "dialog.roi.msg_spec_projected": "Projected [{name}] mean spectral curve to Spectral Profile.",
+        "dialog.roi.err_no_pixels": "ROI [{name}] contains no valid pixels.",
+        "dialog.roi.err_calc_spec_failed": "Failed to compute mean spectrum:",
+        "dialog.roi.err_no_polygons": "ROI [{name}] has no polygons drawn (pixel count is 0).",
+        "dialog.roi.msg_mask_created": "Mask layer [{layer_name}] ({count} polygons, {pixels} pixels) added to Layer Manager.",
+        "dialog.roi.err_no_rois_export": "There are no ROIs available to export.",
+        "dialog.roi.err_export_failed": "Failed to export ROIs:",
+        "dialog.roi.msg_imported": "Successfully imported {count} ROIs from file.",
+        "dialog.roi.err_import_failed": "Failed to import ROIs:",
+        "layer_manager.roi_group": "Regions of Interest",
+        "layer_manager.ctx_roi_tool": "ROI Tool...",
+        "layer_manager.ctx_delete_roi": "Delete ROI",
+        "layer_manager.ctx_new_roi": "New ROI Class",
+
+        # Quick Statistics & Histogram
+        "display.histogram": "Frequency Distribution Histogram",
+        "stats.btn_export": "Export Report (CSV)...",
+        "stats.axis_x": "Pixel Value / DN",
+        "stats.axis_y": "Frequency / Count",
+        "stats.save_title": "Save Statistics CSV Report",
+        "stats.computing": "Computing multi-band statistics...",
+
+        # Layer Stacking
+        "stacking.grp_avail": "Available Bands (From Loaded Layers & Files)",
+        "stacking.btn_browse": "Add from File...",
+        "stacking.btn_add_selected": "Add Selected ->",
+        "stacking.grp_selected": "Bands to Stack (Output Order)",
+        "stacking.btn_up": "▲ Move Up",
+        "stacking.btn_down": "▼ Move Down",
+        "stacking.btn_remove": "Remove",
+        "stacking.btn_clear": "Clear All",
+        "stacking.out_name": "Output Layer Name:",
+        "stacking.err_no_bands": "Please add at least 2 bands to stack.",
+
+        # Resize Data & Subsetting
+        "resize.grp_spatial": "Spatial Subset (Pixel Coordinates)",
+        "resize.samples": "Samples (Width):",
+        "resize.lines": "Lines (Height):",
+        "resize.start": "Start:",
+        "resize.end": "End:",
+        "resize.btn_reset": "Reset to Full Scene",
+        "resize.scale_factor": "Resize Scale Factor:",
+        "resize.scale_1": "1.0x (Original Resolution)",
+        "resize.scale_05": "0.5x (Downsample 2x)",
+        "resize.scale_025": "0.25x (Downsample 4x)",
+        "resize.scale_2": "2.0x (Upsample 2x)",
+        "resize.grp_spectral": "Spectral Subset (Select Bands to Keep)",
+        "resize.btn_select_all": "Select All",
+        "resize.btn_clear_all": "Clear All",
+        "resize.out_name": "Output Layer Name:",
+
+        # Color Space Transforms
+        "color.grp_mode": "Transformation Mode",
+        "color.mode_rgb_hsv": "RGB -> HSV (Hue, Saturation, Value)",
+        "color.mode_hsv_rgb": "HSV -> RGB (Red, Green, Blue)",
+        "color.mode_rgb_gray": "RGB -> Grayscale Luminance",
+        "color.grp_channels": "Input Channel Assignment",
+        "color.ch_r": "Red Band (R):",
+        "color.ch_g": "Green Band (G):",
+        "color.ch_b": "Blue Band (B):",
+        "color.chk_norm": "Normalize raw input channels to [0.0, 1.0] dynamic range",
+        "color.out_name": "Output Layer Name:",
+        "color.btn_execute": "Execute Color Transformation",
+
+        # Continuum Removal
+        "continuum.grp_settings": "Continuum Removal Settings",
+        "continuum.target_layer": "Target Layer:",
+        "continuum.out_name": "Output Layer Name:",
+        "continuum.grp_preview": "Mean Spectrum Preview & Upper Convex Hull",
+        "continuum.btn_run": "Execute Continuum Removal",
+        "continuum.legend_orig": "Original Spectrum",
+        "continuum.legend_hull": "Convex Hull",
+        "continuum.legend_cr": "Continuum Removed",
+        "continuum.failed": "Continuum removal failed",
+
+        # Accuracy Assessment
+        "accuracy.grp_layers": "Input Datasets",
+        "accuracy.classified": "Classified Map:",
+        "accuracy.reference": "Ground Truth / Reference:",
+        "accuracy.btn_compute": "Compute Confusion Matrix & Accuracy",
+        "accuracy.grp_metrics": "Accuracy Metrics",
+        "accuracy.oa": "Overall Accuracy:",
+        "accuracy.kappa": "Kappa Coefficient:",
+        "accuracy.btn_export": "Export Accuracy Report...",
+        "accuracy.oa_idle": "Overall Accuracy: --",
+        "accuracy.kappa_idle": "Kappa Coefficient: --",
+        "accuracy.col_ref_pred": "Ref \\ Pred",
+        "accuracy.col_total": "Total",
+        "accuracy.col_pa": "PA (%)",
+        "accuracy.col_ua": "UA (%)",
+        "accuracy.class_prefix": "Class",
+        "accuracy.err_selection_title": "Selection Error",
+        "accuracy.err_selection_msg": "Please select both a classified layer and a reference layer.",
+        "accuracy.err_compute": "Failed to compute accuracy",
+        "accuracy.save_title": "Save Accuracy Assessment Report",
+        "accuracy.export_success_title": "Export Successful",
+        "accuracy.export_success_msg": "Report saved to:",
+        "accuracy.export_err_msg": "Could not save report",
+
+        # Additional UI Dialogs & Alerts
+        "dialog.error": "Error",
+        "dialog.warning": "Warning",
+        "layer_manager.type_rgb": "RGB",
+        "layer_manager.type_gray": "Gray",
+        "color.ch_h": "Hue Band (H):",
+        "color.ch_s": "Saturation Band (S):",
+        "color.ch_v": "Value Band (V):",
+        "color.failed": "Color transform failed",
+        "data_manager.err_select_band": "Please select a band first",
+        "data_manager.msg_loading_gray": "Loading Grayscale: Band",
+        "data_manager.msg_loading_rgb": "Loading RGB:",
+        "data_manager.err_assign_rgb": "Please assign all R, G, and B bands",
+        "data_manager.msg_dataset_closed": "Dataset closed",
+        "status.layer_removed": "Layer removed",
+        "status.roi_removed": "ROI removed",
+        "status.roi_undone_vertex": "Undid last vertex",
+        "status.roi_cancelled": "Cancelled current polygon",
+        "status.roi_drawing_hint": "ROI Drawing: Left-click to add nodes, Right-click to close, Backspace to undo, Middle-drag to pan",
+        "status.roi_node_added": "ROI node added ({count} nodes) | Left-click to add nodes, Right-click to close",
+        "status.roi_need_3_nodes": "Polygon requires at least 3 nodes to close. Please continue adding points.",
+        "indices.ndvi_name": "NDVI (Normalized Difference Vegetation Index)",
+        "indices.ndwi_name": "NDWI (Normalized Difference Water Index)",
+        "indices.evi_name": "EVI (Enhanced Vegetation Index)",
+        "indices.savi_name": "SAVI (Soil-Adjusted Vegetation Index)",
+        "indices.nbr_name": "NBR (Normalized Burn Ratio)",
+        "indices.err_title": "Calculation Error",
+        "indices.err_msg": "Failed to compute index:",
+        "classification.method_kmeans": "K-Means (Unsupervised Clustering)",
+        "classification.method_isodata": "ISODATA (Iterative Self-Organizing)",
+        "classification.err_title": "Classification Failed",
+        "classification.err_msg": "Error during classification:",
+        "band_math.err_invalid_expr_title": "Invalid Expression",
+        "band_math.err_invalid_expr_msg": "Please enter a Band Math expression.",
+        "band_math.err_compute_title": "Computation Error",
+        "band_math.err_compute_msg": "Failed to compute Band Math:",
+        "pca.err_title": "PCA Computation Failed",
+        "pca.err_msg": "Error during PCA computation:",
+        "stats.err_compute": "Failed to compute statistics",
+        "stats.err_write": "Could not write file",
+        "resize.err_no_bands_title": "No Bands Selected",
+        "resize.err_no_bands_msg": "Please select at least one spectral band.",
+        "resize.err_bounds_title": "Invalid Bounds",
+        "resize.err_bounds_msg": "Start coordinate must be strictly less than End coordinate.",
+        "resize.err_failed": "Failed to subset raster",
+        "stacking.err_open": "Could not open file",
+        "stacking.err_no_bands_title": "No Bands Selected",
+        "stacking.err_no_bands_msg": "Please select at least one band to stack.",
+        "stacking.err_failed": "Failed to stack layers",
+        "synthetic.err_dir_title": "Invalid Directory",
+        "synthetic.err_dir_msg": "Specified output directory does not exist.",
+        "synthetic.err_gen_title": "Generation Failed",
+        "synthetic.err_gen_msg": "Failed to generate synthetic data",
     },
     "zh": {
         # App & Window
@@ -285,9 +503,31 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "app.initialized": "OpenENVI 平台初始化完成",
         "app.about_title": "关于 OpenENVI",
         "app.about_desc": (
-            "<h3>OpenENVI 遥感与高光谱分析平台</h3>"
-            "<p>一款现代化、轻量级、开源的 ENVI 风格桌面遥感与高光谱影像分析平台。</p>"
-            "<p><b>Phase 0: 基础架构脚手架与模块化 UI 界面</b></p>"
+            "<h3>OpenENVI 遥感图像处理平台 v1.0</h3>"
+            "<p>开源、高性能的高光谱与多光谱遥感影像分析处理系统，兼容 ENVI 经典交互规范与工作流。</p>"
+            "<p><b>支持格式：</b>ENVI 标准格式 (.hdr/.dat/.raw/.bsq/.bil/.bip)、GeoTIFF、Landsat 8/9 系列数据。</p>"
+            "<p><b>核心功能：</b>感兴趣区 (ROI) 多边形圈定与统计分析、实时 Z-Profile 反射率波谱探测、波段运算 (Band Math)、光谱指数、主成分分析 (PCA)、影像分类、辐射定标与大气校正、波段融合等。</p>"
+            "<p>基于 PySide6、PyQtGraph、NumPy 与 Rasterio 开发构建。</p>"
+        ),
+        "action.shortcuts": "操作指南与快捷键...",
+        "app.shortcuts_title": "OpenENVI 操作指南与快捷键",
+        "app.shortcuts_desc": (
+            "<h3>OpenENVI 操作指南与常用快捷键</h3>"
+            "<table border='1' cellspacing='0' cellpadding='5' style='border-color: #555; border-collapse: collapse;'>"
+            "<tr><th style='background-color:#333; color:#fff;'>功能与工具</th><th style='background-color:#333; color:#fff;'>操作方式 / 快捷键</th></tr>"
+            "<tr><td>打开栅格数据</td><td>Ctrl+O</td></tr>"
+            "<tr><td>导出栅格影像</td><td>Ctrl+Shift+E</td></tr>"
+            "<tr><td>保存视口图像</td><td>Ctrl+Shift+S</td></tr>"
+            "<tr><td>视口缩放</td><td>鼠标滚轮 或 Ctrl++ / Ctrl+-</td></tr>"
+            "<tr><td>适应视口大小</td><td>点击工具栏「适应窗口 (Fit)」按钮</td></tr>"
+            "<tr><td>平移浏览</td><td>鼠标中键拖拽 或 按住空格键后左键拖动</td></tr>"
+            "<tr><td>像元波谱探针</td><td>主视口左键单击任意像元，实时联动波谱曲线 (Z-Profile)</td></tr>"
+            "<tr><td>ROI 绘制节点</td><td>左键单击连续加点（支持任意数量节点）</td></tr>"
+            "<tr><td>ROI 闭合多边形</td><td>右键单击闭合当前多边形（节点数需大于等于 3）</td></tr>"
+            "<tr><td>ROI 撤销 / 取消</td><td>Backspace 或 Z 撤销上一个节点；Esc 取消正在绘制的多边形</td></tr>"
+            "<tr><td>ROI 删除</td><td>在 ROI 对话框选中行按 Delete，或在图层管理器右键选择「删除 ROI」</td></tr>"
+            "<tr><td>重置面板布局</td><td>菜单「窗口」->「重置面板布局」</td></tr>"
+            "</table>"
         ),
 
         # Menu Titles
@@ -341,11 +581,17 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "data_manager.rb_gray": "单波段灰度",
         "data_manager.rb_rgb": "RGB 彩色合成",
         "data_manager.rgb_group": "RGB 波段通道分配",
+        "data_manager.slot_r": "R: 红色通道",
+        "data_manager.slot_g": "G: 绿色通道",
+        "data_manager.slot_b": "B: 蓝色通道",
+        "data_manager.hint_rgb_target": "点击 R/G/B 按钮切换目标通道，点击波段自动填入",
         "data_manager.btn_load_band": "加载单波段",
         "data_manager.btn_load_rgb": "加载 RGB 合成",
         "data_manager.btn_close_file": "关闭影像文件",
         "data_manager.msg_select_band": "请先在上方树列表中选择波段",
         "data_manager.msg_assign_rgb": "请依次为 R、G、B 通道分配对应波段",
+        "data_manager.msg_loading_gray": "正在加载单波段",
+        "data_manager.msg_loading_rgb": "正在加载 RGB 彩色合成",
         "data_manager.msg_file_closed": "影像文件已关闭",
 
         # Toolbox Dock
@@ -393,7 +639,10 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "spectral_profile.loaded": "波谱曲线: 已加载",
         "spectral_profile.btn_clear": "清空曲线",
         "spectral_profile.axis_x_band": "波段序号",
-        "spectral_profile.axis_x_wavelength": "波段序号 / 波长",
+        "spectral_profile.axis_x_wavelength": "波长",
+        "spectral_profile.mode_band": "波段序号 (Band)",
+        "spectral_profile.mode_wavelength": "波长 (Wavelength)",
+        "spectral_profile.lbl_mode": "横轴坐标: ",
         "spectral_profile.axis_y": "反射率 / 辐射亮度值",
         "spectral_profile.info_idle": "像元坐标: (-, -) | 波谱曲线: 尚未拾取像元",
         "spectral_profile.info_loaded": "像元坐标: ({x}, {y}) | 波谱数据已载入",
@@ -401,6 +650,9 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
 
         # Main View & Overview
         "main_view.overview": "鹰眼导航视口",
+        "main_view.overview_toggle": "鹰眼导航视口",
+        "main_view.overview_minimize": "最小化鹰眼视口",
+        "main_view.overview_restore": "展开鹰眼视口",
 
         # Status Bar
         "status.file_coords": "像元坐标: --, --",
@@ -474,6 +726,9 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.synthetic.samples": "列数 (宽度 Samples):",
         "dialog.synthetic.bands": "波段数量 (Bands):",
         "dialog.synthetic.noise": "高斯噪声 (信噪比 SNR):",
+        "dialog.synthetic.file_format": "文件格式：",
+        "dialog.synthetic.output_dir": "输出保存目录：",
+        "dialog.btn_browse": "浏览...",
         "dialog.synthetic.btn_generate": "一键生成并加载数据立方体",
 
         # 导出栅格
@@ -540,12 +795,193 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.radiometry.grp_params": "定标参数",
         "dialog.radiometry.mtl_detected": "已自动识别并载入 USGS Landsat MTL 元数据参数",
         "dialog.radiometry.custom_notice": "通用栅格：请手动输入定标增益 (Gain)、偏置 (Offset) 与太阳高度角。",
+        "dialog.radiometry.multiplier": "比例增益因子 (Gain / M)：",
+        "dialog.radiometry.offset": "加性偏置 (Bias / A)：",
+        "dialog.radiometry.sun_elevation": "太阳高度角 (度)：",
         "dialog.radiometry.btn_calibrate": "开始定标校正",
 
         # ROI 多边形
         "dialog.roi.btn_draw_poly": "鼠标手绘多边形 ROI",
         "dialog.roi.draw_mode_title": "多边形手绘模式已启动",
-        "dialog.roi.draw_mode_tip": "交互绘制已激活：\n• 在主视口画布上单击左键添加顶点\n• 移动鼠标可实时预览边界连线\n• 右键单击或双击完成闭合",
+        "dialog.roi.draw_mode_tip": "交互绘制已激活：\n- 在主视口画布上单击左键添加顶点\n- 移动鼠标可实时预览边界连线\n- 右键单击完成闭合",
+        "dialog.roi.col_polys": "多边形数",
+        "dialog.roi.col_color": "颜色",
+        "dialog.roi.btn_draw": "绘制多边形",
+        "dialog.roi.btn_stop": "停止绘制",
+        "dialog.roi.btn_new_class": "新建类别",
+        "dialog.roi.btn_undo_poly": "撤销多边形",
+        "dialog.roi.btn_delete_class": "删除类别",
+        "dialog.roi.btn_change_color": "更改颜色",
+        "dialog.roi.btn_save_rois": "导出 ROI...",
+        "dialog.roi.btn_load_rois": "导入 ROI...",
+        "dialog.roi.btn_create_mask": "生成二值掩膜图层",
+        "dialog.roi.tip_status": "选中 ROI 类别并点击 [绘制多边形]。左键添加节点，右键闭合多边形。",
+        "dialog.roi.color_picker_title": "选择 ROI 颜色",
+        "dialog.roi.stats_multiband_title": "ROI 多波段统计报表",
+        "dialog.roi.stats_summary": "ROI 多波段统计报表: {name} (像元数: {count})",
+        "dialog.roi.msg_class_created": "已创建新类别 [{name}]。点击 [绘制多边形] 可直接向该类别添加图形。",
+        "dialog.roi.msg_class_deleted": "已删除类别 [{name}]。",
+        "dialog.roi.msg_undo_poly": "已撤销 [{name}] 的最后一个多边形（当前剩余 {count} 个）。",
+        "dialog.roi.msg_no_undo": "[{name}] 中没有可撤销的多边形。",
+        "dialog.roi.err_no_canvas": "主画布视口未连接。",
+        "dialog.roi.msg_stopped": "已停止绘制模式。随时可再次点击开始绘制。",
+        "dialog.roi.msg_drawing": "[绘制中 - {name}] 左键点击添加节点，右键点击闭合多边形。",
+        "dialog.roi.msg_poly_added": "成功向 [{name}] 添加第 {count} 个多边形！可继续在其他位置添加，或点 [新建类别] 切换。",
+        "dialog.roi.err_select_class": "请先在列表中选中一个 ROI 类别。",
+        "dialog.roi.err_stats_failed": "计算多波段统计失败：",
+        "dialog.roi.msg_stats_done": "已完成 [{name}] 全波段统计分析。",
+        "dialog.roi.msg_spec_projected": "已将 [{name}] 均值波谱曲线投影到波谱窗口。",
+        "dialog.roi.err_no_pixels": "ROI [{name}] 中未包含任何有效像元。",
+        "dialog.roi.err_calc_spec_failed": "计算均值波谱失败：",
+        "dialog.roi.err_no_polygons": "ROI [{name}] 尚未绘制任何多边形，像元数为 0。",
+        "dialog.roi.msg_mask_created": "掩膜图层 [{layer_name}] (包含 {count} 个多边形, {pixels} 像元) 已加入图层管理器。",
+        "dialog.roi.err_no_rois_export": "当前没有可导出的 ROI。",
+        "dialog.roi.err_export_failed": "导出 ROI 失败：",
+        "dialog.roi.msg_imported": "成功从文件导入 {count} 个 ROI。",
+        "dialog.roi.err_import_failed": "导入 ROI 失败：",
+        "layer_manager.roi_group": "感兴趣区 (ROI)",
+        "layer_manager.ctx_roi_tool": "打开 ROI 工具...",
+        "layer_manager.ctx_delete_roi": "删除 ROI",
+        "layer_manager.ctx_new_roi": "新建 ROI 类别",
+
+        # 快速统计与直方图
+        "display.histogram": "像元像频直方图分布",
+        "stats.btn_export": "导出统计报表 (CSV)...",
+        "stats.axis_x": "像元灰度值 / DN",
+        "stats.axis_y": "像元频数 / 计数",
+        "stats.save_title": "保存像元统计 CSV 报表",
+        "stats.computing": "正在计算各波段像元统计与直方图...",
+
+        # 波段合成
+        "stacking.grp_avail": "可用波段 (来自已加载图层与外部文件)",
+        "stacking.btn_browse": "从文件添加...",
+        "stacking.btn_add_selected": "添加选中波段 ->",
+        "stacking.grp_selected": "合成波段列表 (输出顺序)",
+        "stacking.btn_up": "▲ 上移",
+        "stacking.btn_down": "▼ 下移",
+        "stacking.btn_remove": "移除",
+        "stacking.btn_clear": "清空全部",
+        "stacking.out_name": "输出图层名称:",
+        "stacking.err_no_bands": "请至少添加 2 个波段进行波段合成。",
+
+        # 空间/光谱重采样裁剪
+        "resize.grp_spatial": "空间裁剪范围 (像元坐标)",
+        "resize.samples": "列范围 (宽度 Samples):",
+        "resize.lines": "行范围 (高度 Lines):",
+        "resize.start": "起始:",
+        "resize.end": "终止:",
+        "resize.btn_reset": "重置为整幅影像",
+        "resize.scale_factor": "空间重采样缩放比例:",
+        "resize.scale_1": "1.0x (原始分辨率)",
+        "resize.scale_05": "0.5x (降采样 2倍)",
+        "resize.scale_025": "0.25x (降采样 4倍)",
+        "resize.scale_2": "2.0x (上采样 2倍)",
+        "resize.grp_spectral": "光谱子集筛选 (勾选需要保留的波段)",
+        "resize.btn_select_all": "全选",
+        "resize.btn_clear_all": "清除",
+        "resize.out_name": "输出图层名称:",
+
+        # 色彩空间变换
+        "color.grp_mode": "变换模式选择",
+        "color.mode_rgb_hsv": "RGB -> HSV (色调、饱和度、亮度)",
+        "color.mode_hsv_rgb": "HSV -> RGB (红、绿、蓝)",
+        "color.mode_rgb_gray": "RGB -> 灰度亮度图 (Rec. 601)",
+        "color.grp_channels": "输入通道分配",
+        "color.ch_r": "红通道 (R):",
+        "color.ch_g": "绿通道 (G):",
+        "color.ch_b": "蓝通道 (B):",
+        "color.chk_norm": "将输入波段归一化至 [0.0, 1.0] 动态范围",
+        "color.out_name": "输出图层名称:",
+        "color.btn_execute": "执行色彩空间转换",
+
+        # 连续统去除
+        "continuum.grp_settings": "连续统去除参数设置",
+        "continuum.target_layer": "目标图层:",
+        "continuum.out_name": "输出图层名称:",
+        "continuum.grp_preview": "均值波谱与上包络凸包预览",
+        "continuum.btn_run": "开始执行连续统去除",
+        "continuum.legend_orig": "原始反射光谱",
+        "continuum.legend_hull": "上凸包外包络线",
+        "continuum.legend_cr": "连续统去除归一化谱",
+        "continuum.failed": "连续统去除处理失败",
+
+        # 精度评估
+        "accuracy.grp_layers": "输入分类与真值数据集",
+        "accuracy.classified": "待验证分类结果图:",
+        "accuracy.reference": "真实参考验证图 (Ground Truth):",
+        "accuracy.btn_compute": "计算混淆矩阵与分类精度",
+        "accuracy.grp_metrics": "精度评价指标",
+        "accuracy.oa": "总体精度 (Overall Accuracy):",
+        "accuracy.kappa": "Kappa 系数:",
+        "accuracy.btn_export": "导出精度评价报表...",
+        "accuracy.oa_idle": "总体精度 (Overall Accuracy): --",
+        "accuracy.kappa_idle": "Kappa 系数: --",
+        "accuracy.col_ref_pred": "真值参考 \\ 分类预测",
+        "accuracy.col_total": "合计",
+        "accuracy.col_pa": "制图精度 PA (%)",
+        "accuracy.col_ua": "用户精度 UA (%)",
+        "accuracy.class_prefix": "类别",
+        "accuracy.err_selection_title": "图层选择错误",
+        "accuracy.err_selection_msg": "请同时选择待验证分类图和参考真值图。",
+        "accuracy.err_compute": "计算混淆矩阵失败",
+        "accuracy.save_title": "保存分类精度评估报表",
+        "accuracy.export_success_title": "导出成功",
+        "accuracy.export_success_msg": "精度报表已成功保存至:",
+        "accuracy.export_err_msg": "无法保存报表文件",
+
+        # 弹窗与组件提示
+        "dialog.error": "错误",
+        "dialog.warning": "提示",
+        "layer_manager.type_rgb": "RGB",
+        "layer_manager.type_gray": "灰度",
+        "color.ch_h": "色调通道 (H):",
+        "color.ch_s": "饱和度通道 (S):",
+        "color.ch_v": "亮度通道 (V):",
+        "color.failed": "色彩空间转换失败",
+        "data_manager.err_select_band": "请先选择一个波段",
+        "data_manager.msg_loading_gray": "正在加载灰度波段: Band",
+        "data_manager.msg_loading_rgb": "正在加载 RGB 彩色合成:",
+        "data_manager.err_assign_rgb": "请完整分配 R、G、B 三个通道波段",
+        "data_manager.msg_dataset_closed": "数据集已关闭",
+        "status.layer_removed": "图层已移除",
+        "status.roi_removed": "ROI 已移除",
+        "status.roi_undone_vertex": "已撤销上一个顶点",
+        "status.roi_cancelled": "已取消当前多边形",
+        "status.roi_drawing_hint": "ROI 绘制中: 左键点击添加节点，右键点击闭合多边形，按 Backspace 撤销上一点，中键拖拽可漫游画布",
+        "status.roi_node_added": "ROI 节点已添加 ({count} 个节点) | 左键继续加点，右键点击闭合多边形",
+        "status.roi_need_3_nodes": "多边形至少需要 3 个节点才能闭合，请继续左键加点",
+        "indices.ndvi_name": "NDVI (归一化植被指数)",
+        "indices.ndwi_name": "NDWI (归一化水体指数)",
+        "indices.evi_name": "EVI (增强型植被指数)",
+        "indices.savi_name": "SAVI (土壤调节植被指数)",
+        "indices.nbr_name": "NBR (归一化燃烧率)",
+        "indices.err_title": "计算错误",
+        "indices.err_msg": "计算光谱指数失败:",
+        "classification.method_kmeans": "K-Means (无监督动态聚类)",
+        "classification.method_isodata": "ISODATA (迭代自组织数据分析)",
+        "classification.err_title": "分类执行失败",
+        "classification.err_msg": "执行影像分类过程中出错:",
+        "band_math.err_invalid_expr_title": "表达式无效",
+        "band_math.err_invalid_expr_msg": "请输入有效的波段代数数学表达式。",
+        "band_math.err_compute_title": "计算错误",
+        "band_math.err_compute_msg": "执行波段运算失败:",
+        "pca.err_title": "PCA 计算失败",
+        "pca.err_msg": "主成分分析计算过程中出错:",
+        "stats.err_compute": "计算统计量失败",
+        "stats.err_write": "无法写入统计报表文件",
+        "resize.err_no_bands_title": "未选择波段",
+        "resize.err_no_bands_msg": "请至少选择一个光谱波段。",
+        "resize.err_bounds_title": "裁剪坐标无效",
+        "resize.err_bounds_msg": "裁剪起始坐标必须严格小于终止坐标。",
+        "resize.err_failed": "空间/光谱裁剪处理失败",
+        "stacking.err_open": "无法打开影像文件",
+        "stacking.err_no_bands_title": "未选择波段",
+        "stacking.err_no_bands_msg": "请至少选择一个波段参与合成。",
+        "stacking.err_failed": "波段合成处理失败",
+        "synthetic.err_dir_title": "目录不存在",
+        "synthetic.err_dir_msg": "指定的保存输出目录不存在。",
+        "synthetic.err_gen_title": "数据生成失败",
+        "synthetic.err_gen_msg": "生成基准高光谱数据过程中出错",
     },
 }
 

@@ -108,7 +108,11 @@ class BandMathDialog(QDialog):
         """Evaluate expression and emit resulting layer."""
         expr = self.edit_expr.text().strip()
         if not expr:
-            QMessageBox.warning(self, "Invalid Expression", "Please enter a Band Math expression.")
+            QMessageBox.warning(
+                self,
+                tr("band_math.err_invalid_expr_title"),
+                tr("band_math.err_invalid_expr_msg"),
+            )
             return
 
         try:
@@ -124,4 +128,8 @@ class BandMathDialog(QDialog):
             self.result_generated.emit(layer_name, result)
             self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Computation Error", f"Failed to compute Band Math:\n{e}")
+            QMessageBox.critical(
+                self,
+                tr("band_math.err_compute_title"),
+                f"{tr('band_math.err_compute_msg')}\n{e}",
+            )

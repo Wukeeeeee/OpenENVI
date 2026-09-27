@@ -157,7 +157,7 @@ class RadiometryDialog(QDialog):
         # Custom fallback spinboxes
         self.custom_container = QVBoxLayout()
         row_mult = QHBoxLayout()
-        row_mult.addWidget(QLabel("Scale Multiplier (Gain / M):"))
+        row_mult.addWidget(QLabel(tr("dialog.radiometry.multiplier")))
         self.spin_mult = QDoubleSpinBox()
         self.spin_mult.setRange(-1e6, 1e6)
         self.spin_mult.setDecimals(6)
@@ -166,7 +166,7 @@ class RadiometryDialog(QDialog):
         self.custom_container.addLayout(row_mult)
 
         row_add = QHBoxLayout()
-        row_add.addWidget(QLabel("Additive Offset (Bias / A):"))
+        row_add.addWidget(QLabel(tr("dialog.radiometry.offset")))
         self.spin_add = QDoubleSpinBox()
         self.spin_add.setRange(-1e6, 1e6)
         self.spin_add.setDecimals(6)
@@ -175,7 +175,7 @@ class RadiometryDialog(QDialog):
         self.custom_container.addLayout(row_add)
 
         row_sun = QHBoxLayout()
-        row_sun.addWidget(QLabel("Sun Elevation Angle (Degrees):"))
+        row_sun.addWidget(QLabel(tr("dialog.radiometry.sun_elevation")))
         self.spin_sun = QDoubleSpinBox()
         self.spin_sun.setRange(1.0, 90.0)
         self.spin_sun.setDecimals(2)
@@ -242,7 +242,7 @@ class RadiometryDialog(QDialog):
         if cal_params:
             sun_elev = cal_params["sun_elevation"]
             self.lbl_mtl_info.setText(
-                f"✓ {tr('dialog.radiometry.mtl_detected')} (Sun Elevation: {sun_elev:.2f}°)"
+                f"{tr('dialog.radiometry.mtl_detected')} (Sun Elevation: {sun_elev:.2f}°)"
             )
             self.lbl_mtl_info.setStyleSheet("color: #2ecc71; font-weight: bold; padding: 4px;")
             self.spin_sun.setValue(sun_elev)

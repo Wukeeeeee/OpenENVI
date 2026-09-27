@@ -50,11 +50,11 @@ class IndicesDialog(QDialog):
         h_idx.addWidget(QLabel(tr("dialog.indices.select")))
         self.cb_index = QComboBox()
         self.cb_index.addItems([
-            "NDVI (Normalized Difference Vegetation Index)",
-            "NDWI (Normalized Difference Water Index)",
-            "EVI (Enhanced Vegetation Index)",
-            "SAVI (Soil-Adjusted Vegetation Index)",
-            "NBR (Normalized Burn Ratio)",
+            tr("indices.ndvi_name"),
+            tr("indices.ndwi_name"),
+            tr("indices.evi_name"),
+            tr("indices.savi_name"),
+            tr("indices.nbr_name"),
         ])
         self.cb_index.currentIndexChanged.connect(self._on_index_type_changed)
         h_idx.addWidget(self.cb_index, stretch=1)
@@ -171,4 +171,8 @@ class IndicesDialog(QDialog):
             self.result_generated.emit(f"Index: {name}", res)
             self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Calculation Error", f"Failed to compute index:\n{e}")
+            QMessageBox.critical(
+                self,
+                tr("indices.err_title"),
+                f"{tr('indices.err_msg')}\n{e}",
+            )

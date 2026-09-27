@@ -73,3 +73,17 @@ def test_main_window_language_switch(qapp):
     assert window.dock_toolbox.tree.topLevelItem(0).child(0).text(0) == "Band Math"
 
     window.close()
+
+
+def test_i18n_key_parity():
+    """Verify that both English and Chinese translation dictionaries have matching keys."""
+    from core.i18n import TRANSLATIONS
+    en_keys = set(TRANSLATIONS["en"].keys())
+    zh_keys = set(TRANSLATIONS["zh"].keys())
+
+    missing_in_zh = en_keys - zh_keys
+    missing_in_en = zh_keys - en_keys
+
+    assert not missing_in_zh, f"Keys in 'en' but missing in 'zh': {missing_in_zh}"
+    assert not missing_in_en, f"Keys in 'zh' but missing in 'en': {missing_in_en}"
+

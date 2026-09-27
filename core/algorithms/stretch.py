@@ -200,6 +200,15 @@ def apply_stretch(
     Returns:
         Normalized display array of type uint8 (0-255).
     """
+    if image.ndim == 3:
+        # Sequential channel-by-channel processing directly into uint8.
+        # Avoids allocating multiple simultaneous 3D float32 intermediate cubes (saves > 2 GB RAM on large rasters).
+        h, w, c = image.shape
+        out = np.empty((h, w, c), dtype=np.uint8)
+        for i in range(c):
+            out[..., i] = apply_stretch(image[..., i], mode=mode, nodata=nodata)
+        return out
+
     mode_clean = mode.lower()
     if "2%" in mode_clean:
         norm = linear_percent_stretch(image, percent=2.0, nodata=nodata)
@@ -212,4 +221,5 @@ def apply_stretch(
     else:
         norm = min_max_stretch(image, nodata=nodata)
 
-    return (norm * 255.0).astype(np.uint8)
+    res = np.nan_to_num(norm * 255.0, nan=0.0, posinf=255.0, neginf=0.0)
+    return np.clip(res, 0.0, 255.0).astype(np.uint8)

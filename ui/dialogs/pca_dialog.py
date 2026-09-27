@@ -137,4 +137,8 @@ class PCADialog(QDialog):
             self.btn_run.setEnabled(False)
         except Exception as e:
             self.btn_run.setEnabled(True)
-            QMessageBox.critical(self, "PCA Computation Failed", f"Error during PCA computation:\n{e}")
+            QMessageBox.critical(
+                self,
+                tr("pca.err_title"),
+                f"{tr('pca.err_msg')}\n{e}",
+            )

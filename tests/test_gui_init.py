@@ -26,13 +26,6 @@ from ui.status_bar import OpenENVIStatusBar
 from ui.toolbox import ToolboxDock
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    """Ensure a single persistent QApplication instance for tests."""
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
 
 
 def test_core_models():
