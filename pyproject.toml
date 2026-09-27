@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenvi"
+version = "0.1.0"
+description = "Lightweight Open-Source ENVI-Style Remote Sensing & Hyperspectral Platform"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "OpenENVI Developers"}
+]
+keywords = [
+    "remote-sensing",
+    "hyperspectral",
+    "envi",
+    "satellite-imagery",
+    "spectral-analysis",
+    "pyside6",
+    "pyqtgraph",
+    "rasterio"
+]
+dependencies = [
+    "pyside6>=6.5.0",
+    "pyqtgraph>=0.13.3",
+    "numpy>=1.24.0",
+    "rasterio>=1.3.0",
+    "spectral>=0.23.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[project.scripts]
+openenvi = "app.main:main"
+
+[tool.setuptools.packages.find]
+include = ["app*", "core*", "ui*"]
