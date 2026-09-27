@@ -74,11 +74,44 @@ class PCADialog(QDialog):
         """Execute PCA algorithm."""
         num_comp = self.spin_components.value()
         try:
-            # Read full cube from reader
-            bands_data = [self.reader.read_band(b) for b in range(self.layer.metadata.bands)]
-            cube = np.stack(bands_data, axis=0)  # (bands, lines, samples)
+            self.btn_run.setEnabled(False)
+            meta = self.layer.metadata
+            total_pixels = meta.lines * meta.samples
+            bands_count = meta.bands
 
-            score_cube, eigenvalues, explained_var = compute_pca(cube, num_components=num_comp)
+            if total_pixels > 500_000:
+                # Fast sampled covariance on large satellite imagery (> 500k pixels)
+                step = max(1, int(np.sqrt(total_pixels / 250_000)))
+                sample_bands = [self.reader.read_band(b)[::step, ::step] for b in range(bands_count)]
+                sample_cube = np.stack(sample_bands, axis=0)
+                sample_flat = sample_cube.reshape(bands_count, -1).T.astype(np.float32)
+                mean_vec = np.mean(sample_flat, axis=0)
+                cov = np.cov(sample_flat - mean_vec, rowvar=False)
+
+                eigenvalues, eigenvectors = np.linalg.eigh(cov)
+                idx = np.argsort(eigenvalues)[::-1]
+                eigenvalues = eigenvalues[idx]
+                eigenvectors = eigenvectors[:, idx]
+
+                total_var = np.sum(eigenvalues)
+                explained_var = (eigenvalues / total_var if total_var > 0 else np.zeros_like(eigenvalues))[:num_comp]
+
+                # Stream project components one by one without multi-gigabyte memory spikes
+                top_eigenvectors = eigenvectors[:, :num_comp]
+                score_cube = np.zeros((num_comp, meta.lines, meta.samples), dtype=np.float32)
+
+                for k in range(num_comp):
+                    for b in range(bands_count):
+                        coeff = float(top_eigenvectors[b, k])
+                        if abs(coeff) > 1e-7:
+                            b_data = self.reader.read_band(b)
+                            score_cube[k] += coeff * (b_data - float(mean_vec[b]))
+                            del b_data
+            else:
+                # In-memory execution for smaller benchmark cubes
+                bands_data = [self.reader.read_band(b) for b in range(bands_count)]
+                cube = np.stack(bands_data, axis=0)
+                score_cube, eigenvalues, explained_var = compute_pca(cube, num_components=num_comp)
 
             # Build report
             lines = [f"=== PCA Transformation Report for {self.layer.name} ===", ""]
@@ -103,4 +136,5 @@ class PCADialog(QDialog):
 
             self.btn_run.setEnabled(False)
         except Exception as e:
+            self.btn_run.setEnabled(True)
             QMessageBox.critical(self, "PCA Computation Failed", f"Error during PCA computation:\n{e}")

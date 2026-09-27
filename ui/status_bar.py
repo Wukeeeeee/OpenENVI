@@ -75,32 +75,41 @@ class OpenENVIStatusBar(QStatusBar):
     @Slot(int, int)
     def update_hover_coords(self, x: int, y: int) -> None:
         """Update file coordinates on cursor hover."""
-        self._lbl_file_coords.setText(f"File: ({x}, {y})")
+        from core.i18n import tr
+        prefix = tr("status.prefix_file")
+        self._lbl_file_coords.setText(f"{prefix}: ({x}, {y})")
 
     @Slot(int, int)
     def update_clicked_coords(self, x: int, y: int) -> None:
         """Update probe location on click."""
-        self._lbl_file_coords.setText(f"File [Probe]: ({x}, {y})")
+        from core.i18n import tr
+        prefix = tr("status.prefix_probe")
+        self._lbl_file_coords.setText(f"{prefix}: ({x}, {y})")
 
     def update_geo_coords(self, lat: Optional[float], lon: Optional[float]) -> None:
         """Update geospatial coordinates."""
+        from core.i18n import tr
+        prefix = tr("status.prefix_geo")
         if lat is not None and lon is not None:
-            self._lbl_geo_coords.setText(f"Geo: ({lat:.6f}, {lon:.6f})")
+            self._lbl_geo_coords.setText(f"{prefix}: ({lat:.6f}, {lon:.6f})")
         else:
-            self._lbl_geo_coords.setText("Geo: N/A")
+            self._lbl_geo_coords.setText(f"{prefix}: N/A")
 
     def update_pixel_values(self, values: List[float]) -> None:
         """Update spectral band values display."""
+        from core.i18n import i18n, tr
+        prefix = tr("status.prefix_value")
         if not values:
-            self._lbl_pixel_values.setText("Value: --")
+            self._lbl_pixel_values.setText(f"{prefix}: --")
         elif len(values) == 1:
-            self._lbl_pixel_values.setText(f"Value: {values[0]:.4f}")
+            self._lbl_pixel_values.setText(f"{prefix}: {values[0]:.4f}")
         elif len(values) <= 3:
             val_str = ", ".join(f"{v:.2f}" for v in values)
-            self._lbl_pixel_values.setText(f"Value: [{val_str}]")
+            self._lbl_pixel_values.setText(f"{prefix}: [{val_str}]")
         else:
             val_str = ", ".join(f"{v:.2f}" for v in values[:3])
-            self._lbl_pixel_values.setText(f"Value: [{val_str}, ... ({len(values)} bands)]")
+            bands_label = "波段" if i18n.current_language == "zh" else "bands"
+            self._lbl_pixel_values.setText(f"{prefix}: [{val_str}, ... ({len(values)} {bands_label})]")
 
     @Slot(str, int)
     def set_status(self, message: str, timeout: int = 0) -> None:

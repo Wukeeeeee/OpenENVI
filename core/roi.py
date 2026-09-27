@@ -34,11 +34,19 @@ class ROI:
             mask[y0:y1, x0:x1] = True
 
         elif len(self.polygon_points) >= 3:
-            from matplotlib.path import Path
-            poly = Path(self.polygon_points)
-            y, x = np.mgrid[:height, :width]
-            points = np.vstack((x.flatten(), y.flatten())).T
-            mask = poly.contains_points(points).reshape((height, width))
+            pts = np.asarray(self.polygon_points)
+            min_x = max(0, int(np.floor(np.min(pts[:, 0]))))
+            max_x = min(width, int(np.ceil(np.max(pts[:, 0]))))
+            min_y = max(0, int(np.floor(np.min(pts[:, 1]))))
+            max_y = min(height, int(np.ceil(np.max(pts[:, 1]))))
+
+            if max_x > min_x and max_y > min_y:
+                from matplotlib.path import Path
+                poly = Path(pts)
+                box_y, box_x = np.mgrid[min_y:max_y, min_x:max_x]
+                box_points = np.column_stack((box_x.ravel(), box_y.ravel()))
+                sub_mask = poly.contains_points(box_points).reshape((max_y - min_y, max_x - min_x))
+                mask[min_y:max_y, min_x:max_x] = sub_mask
 
         return mask
 

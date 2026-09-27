@@ -26,16 +26,21 @@ def compute_pca(
     """
     bands, lines, samples = cube.shape
     num_components = min(num_components, bands)
+    total_pixels = lines * samples
 
-    # Reshape (bands, lines, samples) to (N, bands) where N = lines * samples
-    flat_data = cube.reshape(bands, -1).T  # shape (N, bands)
-    mean_vec = np.mean(flat_data, axis=0, keepdims=True)
-    centered = flat_data - mean_vec
+    # For large datasets (> 500k pixels), compute covariance on spatial subsample
+    if total_pixels > 500_000:
+        step = max(1, int(np.sqrt(total_pixels / 250_000)))
+        sub_cube = cube[:, ::step, ::step]
+        sub_flat = sub_cube.reshape(bands, -1).T.astype(np.float32)
+        mean_vec = np.mean(sub_flat, axis=0)
+        cov = np.cov(sub_flat - mean_vec, rowvar=False)
+    else:
+        flat_data = cube.reshape(bands, -1).T.astype(np.float32)
+        mean_vec = np.mean(flat_data, axis=0)
+        cov = np.cov(flat_data - mean_vec, rowvar=False)
 
-    # Compute covariance matrix (bands, bands)
-    cov = np.cov(centered, rowvar=False)
-
-    # Eigendecomposition
+    # Eigendecomposition on (bands, bands) covariance matrix
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
 
     # Sort descending
@@ -46,12 +51,15 @@ def compute_pca(
     total_var = np.sum(eigenvalues)
     explained_var = eigenvalues / total_var if total_var > 0 else np.zeros_like(eigenvalues)
 
-    # Project centered data onto top eigenvectors
+    # Project centered data onto top eigenvectors band-by-band to minimize peak memory
     top_eigenvectors = eigenvectors[:, :num_components]
-    scores = np.dot(centered, top_eigenvectors)  # (N, num_components)
+    score_cube = np.zeros((num_components, lines, samples), dtype=np.float32)
 
-    # Reshape back to (num_components, lines, samples)
-    score_cube = scores.T.reshape(num_components, lines, samples).astype(np.float32)
+    for k in range(num_components):
+        for b in range(bands):
+            coeff = float(top_eigenvectors[b, k])
+            if abs(coeff) > 1e-7:
+                score_cube[k] += coeff * (cube[b].astype(np.float32) - float(mean_vec[b]))
 
     return score_cube, eigenvalues, explained_var[:num_components]
 
@@ -76,22 +84,31 @@ def compute_mnf(
     """
     bands, lines, samples = cube.shape
     num_components = min(num_components, bands)
+    total_pixels = lines * samples
 
     # 1. Estimate noise from spatial shift differences: Delta = X[:, :, 1:] - X[:, :, :-1]
-    diff_h = cube[:, :, 1:] - cube[:, :, :-1]
-    diff_flat = diff_h.reshape(bands, -1).T  # shape (N_diff, bands)
-    noise_cov = np.cov(diff_flat, rowvar=False) * 0.5  # variance of difference is 2 * noise_var
+    if total_pixels > 500_000:
+        step = max(1, int(np.sqrt(total_pixels / 250_000)))
+        diff_h = cube[:, ::step, 1::step] - cube[:, ::step, :-1:step]
+        diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)
+        noise_cov = np.cov(diff_flat, rowvar=False) * 0.5
+
+        data_sub = cube[:, ::step, ::step].reshape(bands, -1).T.astype(np.float32)
+        mean_vec = np.mean(data_sub, axis=0)
+        total_cov = np.cov(data_sub - mean_vec, rowvar=False)
+    else:
+        diff_h = cube[:, :, 1:] - cube[:, :, :-1]
+        diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)
+        noise_cov = np.cov(diff_flat, rowvar=False) * 0.5
+
+        data_flat = cube.reshape(bands, -1).T.astype(np.float32)
+        mean_vec = np.mean(data_flat, axis=0)
+        total_cov = np.cov(data_flat - mean_vec, rowvar=False)
 
     # Regularize noise covariance for numerical stability
     noise_cov += np.eye(bands) * 1e-6
 
-    # 2. Total data covariance
-    data_flat = cube.reshape(bands, -1).T
-    data_centered = data_flat - np.mean(data_flat, axis=0, keepdims=True)
-    total_cov = np.cov(data_centered, rowvar=False)
-
-    # 3. Solve generalized eigenvalue problem: total_cov * V = noise_cov * V * D
-    # Equivalent to inv(noise_cov) * total_cov
+    # 2. Solve generalized eigenvalue problem: total_cov * V = noise_cov * V * D
     try:
         inv_noise = np.linalg.pinv(noise_cov)
         mat = np.dot(inv_noise, total_cov)
@@ -105,8 +122,13 @@ def compute_mnf(
         eigenvectors = eigenvectors[:, idx]
 
         top_vectors = eigenvectors[:, :num_components]
-        mnf_scores = np.dot(data_centered, top_vectors)
-        mnf_cube = mnf_scores.T.reshape(num_components, lines, samples).astype(np.float32)
+        mnf_cube = np.zeros((num_components, lines, samples), dtype=np.float32)
+
+        for k in range(num_components):
+            for b in range(bands):
+                coeff = float(top_vectors[b, k])
+                if abs(coeff) > 1e-7:
+                    mnf_cube[k] += coeff * (cube[b].astype(np.float32) - float(mean_vec[b]))
 
         return mnf_cube, eigenvalues[:num_components]
     except Exception:

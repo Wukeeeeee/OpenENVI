@@ -43,8 +43,14 @@ def linear_percent_stretch(
     if len(valid_pixels) == 0:
         return np.zeros_like(image, dtype=np.float32)
 
-    lower_val = float(np.percentile(valid_pixels, percent))
-    upper_val = float(np.percentile(valid_pixels, 100.0 - percent))
+    # Fast sampling for large rasters (> 500k pixels) for instant rendering
+    if len(valid_pixels) > 500_000:
+        sample = valid_pixels[:: len(valid_pixels) // 250_000]
+    else:
+        sample = valid_pixels
+
+    lower_val = float(np.percentile(sample, percent))
+    upper_val = float(np.percentile(sample, 100.0 - percent))
 
     if upper_val <= lower_val:
         upper_val = lower_val + 1e-6
@@ -85,7 +91,12 @@ def histogram_equalization_stretch(
     if len(valid_pixels) == 0:
         return np.zeros_like(image, dtype=np.float32)
 
-    hist, bin_edges = np.histogram(valid_pixels, bins=num_bins)
+    if len(valid_pixels) > 500_000:
+        sample = valid_pixels[:: len(valid_pixels) // 250_000]
+    else:
+        sample = valid_pixels
+
+    hist, bin_edges = np.histogram(sample, bins=num_bins)
     cdf = hist.cumsum().astype(np.float64)
     if cdf[-1] > 0:
         cdf /= cdf[-1]  # Normalize CDF to [0, 1]
@@ -126,8 +137,13 @@ def gaussian_stretch(
     if len(valid_pixels) == 0:
         return np.zeros_like(image, dtype=np.float32)
 
-    mean_val = float(np.mean(valid_pixels))
-    std_val = float(np.std(valid_pixels))
+    if len(valid_pixels) > 500_000:
+        sample = valid_pixels[:: len(valid_pixels) // 250_000]
+    else:
+        sample = valid_pixels
+
+    mean_val = float(np.mean(sample))
+    std_val = float(np.std(sample))
 
     lower_val = mean_val - std_factor * std_val
     upper_val = mean_val + std_factor * std_val

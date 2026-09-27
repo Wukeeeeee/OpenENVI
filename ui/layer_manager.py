@@ -25,6 +25,7 @@ class LayerManagerDock(QDockWidget):
 
     layer_visibility_changed = Signal(str, bool)
     layer_removed = Signal(str)
+    export_layer_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__("Layer Manager", parent)
@@ -43,6 +44,8 @@ class LayerManagerDock(QDockWidget):
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tree.itemChanged.connect(self._on_item_changed)
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree)
 
         # Action Buttons Toolbar
@@ -89,6 +92,15 @@ class LayerManagerDock(QDockWidget):
         item.setCheckState(0, Qt.Checked if layer.is_visible else Qt.Unchecked)
         item.setData(0, Qt.UserRole, layer.layer_id)
         self.tree.setCurrentItem(item)
+
+    def update_layer_display_mode(self, layer_id: str, display_mode: str) -> None:
+        """Update display type string (RGB or Gray) for the given layer."""
+        display_type = "RGB" if display_mode == "rgb" else "Gray"
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item.data(0, Qt.UserRole) == layer_id:
+                item.setText(1, display_type)
+                break
 
     def remove_selected_layer(self) -> Optional[str]:
         """Remove currently selected layer item and emit layer_removed."""
@@ -148,3 +160,27 @@ class LayerManagerDock(QDockWidget):
             layer_id = current.data(0, Qt.UserRole)
             if layer_id:
                 event_bus.layer_changed.emit(layer_id)
+
+    def _show_context_menu(self, pos) -> None:
+        """Show context menu on layer tree item."""
+        item = self.tree.itemAt(pos)
+        if not item:
+            return
+
+        layer_id = item.data(0, Qt.UserRole)
+        if not layer_id:
+            return
+
+        from PySide6.QtWidgets import QMenu
+        from core.i18n import tr
+
+        menu = QMenu(self)
+        act_export = menu.addAction(tr("layer_manager.ctx_export"))
+        act_remove = menu.addAction(tr("layer_manager.btn_remove"))
+
+        action = menu.exec(self.tree.viewport().mapToGlobal(pos))
+        if action == act_export:
+            self.export_layer_requested.emit(layer_id)
+        elif action == act_remove:
+            self.remove_selected_layer()
+

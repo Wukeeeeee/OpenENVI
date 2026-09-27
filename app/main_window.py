@@ -6,9 +6,9 @@ interactive algorithm dialogs, and real-time cursor/spectral probing.
 """
 
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import numpy as np
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QSettings, Qt, Slot
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -26,11 +26,20 @@ from core.io.memory import MemoryRasterReader
 from core.io.reader import open_raster
 from core.models import RasterLayer
 from ui.data_manager import DataManagerDock
+from ui.dialogs.accuracy_dialog import AccuracyAssessmentDialog
 from ui.dialogs.band_math_dialog import BandMathDialog
 from ui.dialogs.classification_dialog import ClassificationDialog
+from ui.dialogs.color_dialog import ColorTransformDialog
+from ui.dialogs.continuum_dialog import ContinuumRemovalDialog
+from ui.dialogs.export_dialog import ExportRasterDialog
 from ui.dialogs.indices_dialog import IndicesDialog
+from ui.dialogs.pansharpen_dialog import PanSharpenDialog
 from ui.dialogs.pca_dialog import PCADialog
+from ui.dialogs.radiometry_dialog import RadiometryDialog
+from ui.dialogs.resize_dialog import ResizeDataDialog
 from ui.dialogs.roi_dialog import ROIToolDialog
+from ui.dialogs.stacking_dialog import LayerStackingDialog
+from ui.dialogs.stats_dialog import QuickStatsDialog
 from ui.dialogs.synthetic_dialog import SyntheticDataDialog
 from ui.layer_manager import LayerManagerDock
 from ui.main_view import MainViewWidget
@@ -51,6 +60,12 @@ class OpenENVIMainWindow(QMainWindow):
         self._readers: Dict[str, BaseRasterReader] = {}
         self._layers: Dict[str, RasterLayer] = {}
         self._active_layer_id: Optional[str] = None
+
+        # Restore saved language preference before building UI
+        settings = QSettings("OpenENVI", "OpenENVI")
+        saved_lang = settings.value("language", None)
+        if saved_lang in ("en", "zh"):
+            i18n.set_language(saved_lang)
 
         # Initialize Central Viewport
         self.main_view = MainViewWidget(self)
@@ -74,6 +89,19 @@ class OpenENVIMainWindow(QMainWindow):
         # Retranslate on creation and connect language changes
         self.retranslate_ui()
         i18n.language_changed.connect(lambda _: self.retranslate_ui())
+
+        # Restore window geometry, dock layout, and stretch mode
+        saved_geom = settings.value("geometry")
+        if saved_geom:
+            self.restoreGeometry(saved_geom)
+        saved_state = settings.value("windowState")
+        if saved_state:
+            self.restoreState(saved_state)
+        saved_stretch = settings.value("stretch_mode")
+        if saved_stretch:
+            idx = self.cb_stretch.findText(str(saved_stretch))
+            if idx >= 0:
+                self.cb_stretch.setCurrentIndex(idx)
 
         event_bus.status_message.emit(tr("app.initialized"), 3000)
 
@@ -148,6 +176,38 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_roi = QAction("Region of Interest (ROI) Tool...", self)
         self.act_roi.triggered.connect(self.show_roi_dialog)
 
+        self.act_export_raster = QAction("Export Raster / Save As...", self)
+        self.act_export_raster.setShortcut(QKeySequence("Ctrl+Shift+E"))
+        self.act_export_raster.triggered.connect(lambda: self.show_export_dialog())
+
+        self.act_save_view_image = QAction("Save Viewport as Image...", self)
+        self.act_save_view_image.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.act_save_view_image.triggered.connect(self._save_view_image)
+
+        self.act_pansharpen = QAction("Pan-Sharpening Image Fusion...", self)
+        self.act_pansharpen.triggered.connect(self.show_pansharpen_dialog)
+
+        self.act_radiometry = QAction("Radiometric Calibration & Atmospheric Correction...", self)
+        self.act_radiometry.triggered.connect(self.show_radiometry_dialog)
+
+        self.act_stats = QAction("Quick Statistics...", self)
+        self.act_stats.triggered.connect(self.show_stats_dialog)
+
+        self.act_stacking = QAction("Layer Stacking...", self)
+        self.act_stacking.triggered.connect(self.show_layer_stacking_dialog)
+
+        self.act_resize = QAction("Resize Data (Spatial/Spectral)...", self)
+        self.act_resize.triggered.connect(self.show_resize_dialog)
+
+        self.act_color = QAction("Color Space Transforms (RGB-HSV)...", self)
+        self.act_color.triggered.connect(self.show_color_transform_dialog)
+
+        self.act_continuum = QAction("Continuum Removal...", self)
+        self.act_continuum.triggered.connect(self.show_continuum_removal_dialog)
+
+        self.act_accuracy = QAction("Confusion Matrix & Accuracy Assessment...", self)
+        self.act_accuracy.triggered.connect(self.show_accuracy_assessment_dialog)
+
         # Window & Help Actions
         self.act_reset_layout = QAction("Reset Dock Layout", self)
         self.act_reset_layout.triggered.connect(self._reset_dock_layout)
@@ -178,6 +238,8 @@ class OpenENVIMainWindow(QMainWindow):
         # File Menu
         self.menu_file = mb.addMenu("&File")
         self.menu_file.addAction(self.act_open)
+        self.menu_file.addAction(self.act_export_raster)
+        self.menu_file.addAction(self.act_save_view_image)
         self.menu_file.addAction(self.act_gen_data)
         self.menu_file.addSeparator()
         self.menu_file.addAction(self.act_exit)
@@ -212,6 +274,14 @@ class OpenENVIMainWindow(QMainWindow):
         self.menu_tools.addAction(self.act_indices)
         self.menu_tools.addAction(self.act_pca)
         self.menu_tools.addAction(self.act_classification)
+        self.menu_tools.addAction(self.act_pansharpen)
+        self.menu_tools.addAction(self.act_radiometry)
+        self.menu_tools.addAction(self.act_stats)
+        self.menu_tools.addAction(self.act_stacking)
+        self.menu_tools.addAction(self.act_resize)
+        self.menu_tools.addAction(self.act_color)
+        self.menu_tools.addAction(self.act_continuum)
+        self.menu_tools.addAction(self.act_accuracy)
 
         # Window Menu
         self.menu_window = mb.addMenu("&Window")
@@ -269,6 +339,7 @@ class OpenENVIMainWindow(QMainWindow):
         # Layer Manager interactions
         self.dock_layer_manager.layer_visibility_changed.connect(self._on_layer_visibility_changed)
         self.dock_layer_manager.layer_removed.connect(self._on_layer_removed)
+        self.dock_layer_manager.export_layer_requested.connect(self.show_export_dialog)
         event_bus.layer_changed.connect(self._on_active_layer_changed)
 
         # Toolbox double click -> Launch tool
@@ -289,13 +360,23 @@ class OpenENVIMainWindow(QMainWindow):
         """
         try:
             reader = open_raster(file_path)
-            layer_id = f"layer_{len(self._layers) + 1}_{os.path.basename(file_path)}"
+            raw_base = os.path.basename(file_path)
+            # Prettify Landsat MTL package name
+            if "_MTL.txt" in raw_base or "_mtl.txt" in raw_base:
+                clean_name = raw_base.replace("_MTL.txt", "").replace("_mtl.txt", "")
+            else:
+                clean_name = raw_base
+
+            layer_id = f"layer_{len(self._layers) + 1}_{clean_name}"
+            meta = reader.metadata
+            is_rgb = (meta.default_bands is not None and len(meta.default_bands) == 3) or (meta.bands >= 3)
             layer = RasterLayer(
                 layer_id=layer_id,
-                name=os.path.basename(file_path),
+                name=clean_name,
                 file_path=file_path,
-                metadata=reader.metadata,
+                metadata=meta,
                 is_visible=True,
+                display_mode="rgb" if is_rgb else "grayscale",
             )
 
             self._readers[layer_id] = reader
@@ -305,8 +386,11 @@ class OpenENVIMainWindow(QMainWindow):
             self.dock_layer_manager.add_layer(layer)
             self.dock_data_manager.add_dataset(layer)
 
-            # Auto-display: RGB if >= 3 bands, else Band 0 Grayscale
-            if reader.metadata.bands >= 3:
+            # Auto-display: Prioritize calibrated default RGB (e.g. Landsat True Color B4-B3-B2)
+            if meta.default_bands and len(meta.default_bands) == 3:
+                r, g, b = meta.default_bands
+                self.load_rgb_composition(layer_id, r, g, b)
+            elif meta.bands >= 3:
                 self.load_rgb_composition(layer_id, 0, 1, 2)
             else:
                 self.load_grayscale_band(layer_id, 0)
@@ -314,13 +398,19 @@ class OpenENVIMainWindow(QMainWindow):
             event_bus.status_message.emit(f"Opened: {layer.name}", 3000)
             return layer
         except Exception as e:
-            QMessageBox.critical(self, "Open Image Error", f"Failed to open image:\n{e}")
+            if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                QMessageBox.critical(self, "Open Image Error", f"Failed to open image:\n{e}")
             return None
 
-    def add_derived_layer(self, name: str, data: np.ndarray) -> RasterLayer:
+    def add_derived_layer(
+        self,
+        name: str,
+        data: np.ndarray,
+        parent_metadata: Optional[object] = None,
+    ) -> RasterLayer:
         """Register an in-memory computed array as a new project raster layer."""
-        parent_meta = None
-        if self._active_layer_id and self._active_layer_id in self._readers:
+        parent_meta = parent_metadata
+        if parent_meta is None and self._active_layer_id and self._active_layer_id in self._readers:
             parent_meta = self._readers[self._active_layer_id].metadata
 
         reader = MemoryRasterReader(data, name=name, parent_metadata=parent_meta)
@@ -363,6 +453,7 @@ class OpenENVIMainWindow(QMainWindow):
         layer = self._layers[layer_id]
         layer.display_mode = "grayscale"
         layer.active_bands = (band_idx,)
+        self.dock_layer_manager.update_layer_display_mode(layer_id, "grayscale")
 
         self.main_view.display_raster(band_data, reset_view=False)
         event_bus.status_message.emit(f"Displaying: {layer.name} [Band {band_idx + 1}]", 2000)
@@ -382,6 +473,7 @@ class OpenENVIMainWindow(QMainWindow):
         layer = self._layers[layer_id]
         layer.display_mode = "rgb"
         layer.active_bands = (r, g, b)
+        self.dock_layer_manager.update_layer_display_mode(layer_id, "rgb")
 
         self.main_view.display_raster(rgb_cube, reset_view=False)
         event_bus.status_message.emit(
@@ -497,6 +589,12 @@ class OpenENVIMainWindow(QMainWindow):
         tl = tool_name.lower()
         if "band_math" in tl or "math" in tl:
             self.show_band_math_dialog()
+        elif "export" in tl or "save" in tl:
+            self.show_export_dialog()
+        elif "pansharpen" in tl or "sharpen" in tl or "fusion" in tl:
+            self.show_pansharpen_dialog()
+        elif "radiometry" in tl or "calibration" in tl or "dos" in tl:
+            self.show_radiometry_dialog()
         elif any(k in tl for k in ("ndvi", "ndwi", "evi", "savi", "nbr", "index", "indices")):
             self.show_indices_dialog()
         elif "pca" in tl or "mnf" in tl or "principal" in tl:
@@ -505,6 +603,85 @@ class OpenENVIMainWindow(QMainWindow):
             self.show_classification_dialog()
         elif "roi" in tl or "region" in tl:
             self.show_roi_dialog()
+        elif "stat" in tl:
+            self.show_stats_dialog()
+        elif "stack" in tl:
+            self.show_layer_stacking_dialog()
+        elif "resize" in tl or "subset" in tl:
+            self.show_resize_dialog()
+        elif "color" in tl or "hsv" in tl:
+            self.show_color_transform_dialog()
+        elif "continuum" in tl or "convex" in tl:
+            self.show_continuum_removal_dialog()
+        elif "accuracy" in tl or "confusion" in tl or "matrix" in tl:
+            self.show_accuracy_assessment_dialog()
+
+    def get_available_layers(self) -> Dict[str, Tuple[RasterLayer, BaseRasterReader]]:
+        """Return dictionary of loaded layers and their readers."""
+        return {
+            lid: (self._layers[lid], self._readers[lid])
+            for lid in self._layers
+            if lid in self._readers
+        }
+
+    def show_export_dialog(self, layer_id: Optional[str] = None) -> None:
+        """Open Export Raster dialog."""
+        target_id = layer_id or self._active_layer_id
+        if not target_id or target_id not in self._layers or target_id not in self._readers:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+
+        available = self.get_available_layers()
+        dlg = ExportRasterDialog(
+            layer=self._layers[target_id],
+            reader=self._readers[target_id],
+            available_layers=available,
+            parent=self,
+        )
+        dlg.export_completed.connect(self._on_raster_exported)
+        dlg.exec()
+
+    def _on_raster_exported(self, file_path: str) -> None:
+        """Handle completion of raster export by optionally loading exported file."""
+        reply = QMessageBox.question(
+            self,
+            "Open Exported Raster",
+            f"Raster saved successfully:\n{file_path}\n\nWould you like to load it into OpenENVI now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self.open_raster_file(file_path)
+
+    def show_pansharpen_dialog(self) -> None:
+        """Open Pan-Sharpening image fusion dialog."""
+        available = self.get_available_layers()
+        if not available:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+
+        dlg = PanSharpenDialog(
+            available_layers=available,
+            active_layer_id=self._active_layer_id,
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_radiometry_dialog(self) -> None:
+        """Open Radiometric Calibration and Atmospheric Correction dialog."""
+        available = self.get_available_layers()
+        if not available:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+
+        dlg = RadiometryDialog(
+            available_layers=available,
+            active_layer_id=self._active_layer_id,
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
 
     def show_band_math_dialog(self) -> None:
         """Open Band Math dialog."""
@@ -559,16 +736,116 @@ class OpenENVIMainWindow(QMainWindow):
         dlg.exec()
 
     def show_roi_dialog(self) -> None:
-        """Open ROI Tool dialog."""
+        """Open ROI Tool dialog with interactive polygon canvas drawing (modeless)."""
         if not self._active_layer_id:
             QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
             return
-        dlg = ROIToolDialog(
+        if hasattr(self, "_roi_dialog") and self._roi_dialog is not None and self._roi_dialog.isVisible():
+            self._roi_dialog.raise_()
+            self._roi_dialog.activateWindow()
+            return
+        self._roi_dialog = ROIToolDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            main_view=self.main_view,
+            parent=self,
+        )
+        self._roi_dialog.plot_mean_spectrum_requested.connect(self.dock_spectral_profile.add_spectrum_overlay)
+        self._roi_dialog.mask_generated.connect(self.add_derived_layer)
+        self._roi_dialog.show()
+
+    def show_stats_dialog(self) -> None:
+        """Open Quick Statistics dialog for active layer."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = QuickStatsDialog(
             layer=self._layers[self._active_layer_id],
             reader=self._readers[self._active_layer_id],
             parent=self,
         )
-        dlg.plot_mean_spectrum_requested.connect(self.dock_spectral_profile.add_spectrum_overlay)
+        dlg.exec()
+
+    def _save_view_image(self) -> None:
+        """Export the currently displayed stretched image to PNG/JPEG/BMP."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        layer_name = self._layers[self._active_layer_id].name
+        clean_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in layer_name)
+        default_path = f"{clean_name}_view.png"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("menu.save_view_image"),
+            default_path,
+            "PNG Image (*.png);;JPEG Image (*.jpg);;BMP Image (*.bmp)",
+        )
+        if not file_path:
+            return
+        ok = self.main_view.save_view_image(file_path)
+        if ok:
+            event_bus.status_message.emit(f"Viewport saved to: {file_path}", 4000)
+            QMessageBox.information(self, tr("dialog.export.success_title"), f"Image saved successfully to:\n{file_path}")
+        else:
+            QMessageBox.critical(self, tr("dialog.export.err_title"), "Failed to save viewport image.")
+
+    def show_layer_stacking_dialog(self) -> None:
+        """Open Layer Stacking dialog to combine bands from multiple datasets."""
+        layers = self.get_available_layers()
+        dlg = LayerStackingDialog(layers, parent=self)
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_resize_dialog(self) -> None:
+        """Open Resize Data / Subsetting dialog for active layer."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = ResizeDataDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_color_transform_dialog(self) -> None:
+        """Open Color Space Transform (RGB-HSV) dialog for active layer."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = ColorTransformDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_continuum_removal_dialog(self) -> None:
+        """Open Continuum Removal dialog for active layer."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = ContinuumRemovalDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_accuracy_assessment_dialog(self) -> None:
+        """Open Confusion Matrix & Accuracy Assessment dialog."""
+        layers = self.get_available_layers()
+        if len(layers) < 1:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = AccuracyAssessmentDialog(
+            layers=layers,
+            active_layer_id=self._active_layer_id,
+            parent=self,
+        )
         dlg.exec()
 
     def show_synthetic_generator_dialog(self) -> None:
@@ -593,6 +870,9 @@ class OpenENVIMainWindow(QMainWindow):
 
         # Actions
         self.act_open.setText(tr("action.open"))
+        self.act_export_raster.setText(tr("menu.export_raster"))
+        self.act_save_view_image.setText(tr("menu.save_view_image"))
+        self.act_gen_data.setText(tr("action.gen_data"))
         self.act_exit.setText(tr("action.exit"))
         self.act_probe.setText(tr("action.probe"))
         self.act_pan.setText(tr("action.pan"))
@@ -603,6 +883,27 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_remove_layer.setText(tr("action.remove_layer"))
         self.act_reset_layout.setText(tr("action.reset_layout"))
         self.act_about.setText(tr("action.about"))
+
+        # Tools Menu Actions
+        self.act_roi.setText(tr("action.roi"))
+        self.act_band_math.setText(tr("action.band_math"))
+        self.act_indices.setText(tr("action.indices"))
+        self.act_pca.setText(tr("action.pca"))
+        self.act_classification.setText(tr("action.classification"))
+        self.act_pansharpen.setText(tr("menu.pansharpen"))
+        self.act_radiometry.setText(tr("menu.radiometry"))
+        self.act_stats.setText(tr("action.stats"))
+        self.act_stacking.setText(tr("menu.stacking"))
+        self.act_resize.setText(tr("menu.resize"))
+        self.act_color.setText(tr("menu.color"))
+        self.act_continuum.setText(tr("menu.continuum"))
+        self.act_accuracy.setText(tr("menu.accuracy"))
+
+        # Display Menu Stretch Actions
+        self.act_stretch_lin2.setText(tr("stretch.linear2"))
+        self.act_stretch_lin5.setText(tr("stretch.linear5"))
+        self.act_stretch_eq.setText(tr("stretch.equalize"))
+        self.act_stretch_gauss.setText(tr("stretch.gaussian"))
 
         # Stretch Selector
         self.lbl_stretch.setText(tr("stretch.label"))
@@ -629,7 +930,18 @@ class OpenENVIMainWindow(QMainWindow):
     def _set_language(self, lang: str) -> None:
         """Handle language change from menu."""
         i18n.set_language(lang)
+        settings = QSettings("OpenENVI", "OpenENVI")
+        settings.setValue("language", lang)
         event_bus.language_changed.emit(lang)
+
+    def closeEvent(self, event) -> None:
+        """Save window layout, geometry, language, and stretch enhancement upon exit."""
+        settings = QSettings("OpenENVI", "OpenENVI")
+        settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("windowState", self.saveState())
+        settings.setValue("language", i18n.current_language)
+        settings.setValue("stretch_mode", self.cb_stretch.currentText())
+        super().closeEvent(event)
 
     def _on_stretch_changed(self, mode: str) -> None:
         """Handle contrast stretch mode change."""

@@ -72,6 +72,7 @@ class SpectralProfileDock(QDockWidget):
         event_bus.pixel_clicked.connect(self._on_pixel_clicked)
 
         # Retranslate on creation and on language change
+        self._last_stats: Optional[dict] = None
         self.retranslate_ui()
         from core.i18n import i18n
         i18n.language_changed.connect(lambda _: self.retranslate_ui())
@@ -83,11 +84,16 @@ class SpectralProfileDock(QDockWidget):
         self._btn_clear.setText(tr("spectral_profile.btn_clear"))
         self.plot_widget.setLabel("left", tr("spectral_profile.axis_y"))
         self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_wavelength"), units="nm")
+        if self._last_stats is None:
+            self._lbl_info.setText(tr("spectral_profile.info_idle"))
+        else:
+            self._lbl_info.setText(tr("spectral_profile.info_stats").format(**self._last_stats))
 
     @Slot(int, int)
     def _on_pixel_clicked(self, x: int, y: int) -> None:
         """Handle pixel click from raster canvas."""
-        self._lbl_info.setText(f"Position: ({x}, {y}) | Spectrum Loaded")
+        from core.i18n import tr
+        self._lbl_info.setText(tr("spectral_profile.info_loaded").format(x=x, y=y))
         event_bus.profile_requested.emit(x, y)
 
     def set_spectrum(
@@ -109,17 +115,23 @@ class SpectralProfileDock(QDockWidget):
             self.clear_spectrum()
             return
 
+        from core.i18n import tr
         if wavelengths is not None and len(wavelengths) == len(values):
             x_data = wavelengths
-            self.plot_widget.setLabel("bottom", "Wavelength", units="nm")
+            self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_wavelength"), units="nm")
         else:
             x_data = np.arange(1, len(values) + 1)
-            self.plot_widget.setLabel("bottom", "Band Number")
+            self.plot_widget.setLabel("bottom", tr("spectral_profile.axis_x_band"))
 
         self._curve.setData(x_data, values)
-        self._lbl_info.setText(
-            f"Position: ({x}, {y}) | Bands: {len(values)} | Min: {np.min(values):.3f} | Max: {np.max(values):.3f}"
-        )
+        self._last_stats = {
+            "x": x,
+            "y": y,
+            "bands": len(values),
+            "min_val": float(np.min(values)),
+            "max_val": float(np.max(values)),
+        }
+        self._lbl_info.setText(tr("spectral_profile.info_stats").format(**self._last_stats))
 
     def add_spectrum_overlay(
         self,

@@ -40,3 +40,11 @@ openenvi = "app.main:main"
 
 [tool.setuptools.packages.find]
 include = ["app*", "core*", "ui*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::rasterio.errors.NotGeoreferencedWarning",
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+]
+

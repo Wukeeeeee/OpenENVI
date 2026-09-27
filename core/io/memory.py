@@ -23,8 +23,16 @@ class MemoryRasterReader(BaseRasterReader):
             # (H, W) -> (1, H, W)
             self._cube = data[np.newaxis, :, :].astype(np.float32)
         elif data.ndim == 3:
-            if data.shape[-1] <= 10 and data.shape[0] > 10:
-                # (H, W, bands) -> (bands, H, W)
+            # Determine whether array is (H, W, bands) or (bands, H, W)
+            if self._parent_meta and data.shape[0] == self._parent_meta.height and data.shape[1] == self._parent_meta.width:
+                self._cube = np.transpose(data, (2, 0, 1)).astype(np.float32)
+            elif self._parent_meta and data.shape[1] == self._parent_meta.height and data.shape[2] == self._parent_meta.width:
+                self._cube = data.astype(np.float32)
+            elif data.shape[-1] < min(data.shape[0], data.shape[1]):
+                self._cube = np.transpose(data, (2, 0, 1)).astype(np.float32)
+            elif data.shape[0] < min(data.shape[1], data.shape[2]):
+                self._cube = data.astype(np.float32)
+            elif data.shape[-1] <= 100:
                 self._cube = np.transpose(data, (2, 0, 1)).astype(np.float32)
             else:
                 self._cube = data.astype(np.float32)

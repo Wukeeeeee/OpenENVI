@@ -4,9 +4,12 @@ Provides an ENVI-style hierarchical tree of remote sensing and spectral algorith
 """
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QDockWidget,
     QLineEdit,
+    QStyle,
+    QStyledItemDelegate,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -14,6 +17,62 @@ from PySide6.QtWidgets import (
 )
 
 from core.events import event_bus
+
+# Set of tool identifiers that are fully implemented and available
+IMPLEMENTED_TOOLS = {
+    # Basic Tools
+    "band_math",
+    "roi",
+    "export",
+    "stats",
+    "stacking",
+    "resize",
+    # Transforms
+    "pansharpen",
+    "radiometry",
+    "pca",
+    "mnf",
+    "color",
+    # Classification
+    "kmeans",
+    "isodata",
+    "sam",
+    "accuracy",
+    # Spectral
+    "continuum",
+    # Indices
+    "ndvi",
+    "ndwi",
+    "evi",
+    "savi",
+    "nbr",
+}
+
+
+class StrikethroughDelegate(QStyledItemDelegate):
+    """Custom delegate to draw a distinct red strikethrough line on unimplemented tools."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        is_implemented = index.data(Qt.UserRole + 1)
+        if is_implemented is False:
+            text = index.data(Qt.DisplayRole)
+            if text:
+                text_rect = option.widget.style().subElementRect(
+                    QStyle.SubElement.SE_ItemViewItemText, option, option.widget
+                )
+                if text_rect.isValid() and text_rect.width() > 0:
+                    fm = option.fontMetrics
+                    tw = fm.horizontalAdvance(text)
+                    y_mid = text_rect.center().y()
+                    x_start = text_rect.left()
+                    x_end = min(text_rect.right() - 2, x_start + tw)
+                    if x_end > x_start:
+                        painter.save()
+                        painter.setRenderHint(QPainter.Antialiasing, True)
+                        painter.setPen(QPen(QColor("#e74c3c"), 1.8))
+                        painter.drawLine(x_start, y_mid, x_end, y_mid)
+                        painter.restore()
 
 
 class ToolboxDock(QDockWidget):
@@ -40,6 +99,7 @@ class ToolboxDock(QDockWidget):
         # Algorithm Tree
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
+        self.tree.setItemDelegate(StrikethroughDelegate(self.tree))
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.tree)
 
@@ -67,12 +127,15 @@ class ToolboxDock(QDockWidget):
             tr("toolbox.cat_basic"): [
                 ("band_math", tr("toolbox.tool_band_math")),
                 ("roi", tr("toolbox.tool_roi")),
+                ("export", tr("toolbox.tool_export")),
                 ("resize", tr("toolbox.tool_resize")),
                 ("stacking", tr("toolbox.tool_stacking")),
                 ("mosaic", tr("toolbox.tool_mosaic")),
                 ("stats", tr("toolbox.tool_stats")),
             ],
             tr("toolbox.cat_transforms"): [
+                ("pansharpen", tr("toolbox.tool_pansharpen")),
+                ("radiometry", tr("toolbox.tool_radiometry")),
                 ("pca", tr("toolbox.tool_pca")),
                 ("mnf", tr("toolbox.tool_mnf")),
                 ("ica", tr("toolbox.tool_ica")),
@@ -107,6 +170,16 @@ class ToolboxDock(QDockWidget):
             for tool_id, display_name in tool_list:
                 item = QTreeWidgetItem(category_item, [display_name])
                 item.setData(0, Qt.UserRole, tool_id)
+                is_implemented = tool_id in IMPLEMENTED_TOOLS
+                item.setData(0, Qt.UserRole + 1, is_implemented)
+                if not is_implemented:
+                    font = item.font(0)
+                    font.setStrikeOut(True)
+                    item.setFont(0, font)
+                    item.setForeground(0, QBrush(QColor("#8e9297")))
+                    item.setToolTip(0, tr("toolbox.not_implemented"))
+                else:
+                    item.setForeground(0, QBrush(QColor("#e8eaed")))
 
     def _filter_tools(self, text: str) -> None:
         """Filter tree items by query text."""
@@ -126,6 +199,15 @@ class ToolboxDock(QDockWidget):
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """Handle tool selection."""
         tool_name = item.data(0, Qt.UserRole)
-        if tool_name:
-            self.tool_selected.emit(tool_name)
-            event_bus.status_message.emit(f"Tool selected: {tool_name}", 3000)
+        is_implemented = item.data(0, Qt.UserRole + 1)
+        if not tool_name:
+            return
+
+        if is_implemented is False:
+            from core.i18n import tr
+            msg = f"{item.text(0)}: {tr('toolbox.msg_not_implemented')}"
+            event_bus.status_message.emit(f"⚠️ {msg}", 3000)
+            return
+
+        self.tool_selected.emit(tool_name)
+        event_bus.status_message.emit(f"Tool selected: {tool_name}", 3000)

@@ -5,7 +5,7 @@ Provides pan, zoom, dynamic stretch enhancements, and a fully synchronized ENVI-
 Eagle-Eye overview inset with visible extent tracker.
 """
 
-from typing import Optional
+from typing import List, Optional, Tuple
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -27,6 +27,7 @@ class MainViewWidget(QWidget):
     """Central raster display canvas with synchronized overview window."""
 
     view_resized = Signal(int, int)
+    polygon_roi_completed = Signal(list)  # List[Tuple[float, float]]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -90,6 +91,14 @@ class MainViewWidget(QWidget):
         self._stretch_mode = "Linear 2%"
         self._updating_roi = False
 
+        # ROI interactive drawing state
+        self._is_drawing_roi: bool = False
+        self._roi_draw_color: str = "#00ffcc"
+        self._current_poly_pts: List[Tuple[float, float]] = []
+        self._drawing_curve: Optional[pg.PlotDataItem] = None
+        self._rubber_curve: Optional[pg.PlotCurveItem] = None
+        self._roi_items: List[pg.GraphicsObject] = []
+
         # Connect scene mouse events
         self.glw.scene().sigMouseMoved.connect(self._on_mouse_moved)
         self.image_item.mouseClickEvent = self._on_image_clicked
@@ -97,6 +106,16 @@ class MainViewWidget(QWidget):
 
         # Connect event bus
         event_bus.stretch_mode_changed.connect(self.set_stretch_mode)
+
+        # Retranslate on creation and on language change
+        self.retranslate_ui()
+        from core.i18n import i18n
+        i18n.language_changed.connect(lambda _: self.retranslate_ui())
+
+    def retranslate_ui(self) -> None:
+        """Update texts based on active language."""
+        from core.i18n import tr
+        self.lbl_overview.setText(tr("main_view.overview"))
 
     def resizeEvent(self, event) -> None:
         """Reposition overview inset to bottom-right corner."""
@@ -123,7 +142,15 @@ class MainViewWidget(QWidget):
         stretched = apply_stretch(raw_data, mode=self._stretch_mode)
 
         self.image_item.setImage(stretched, axisOrder="row-major")
-        self.overview_img.setImage(stretched, axisOrder="row-major")
+
+        # Downsample for Eagle-Eye overview inset to maintain fast rendering on large rasters
+        step = max(1, max(self._raster_h, self._raster_w) // 400)
+        overview_data = stretched[::step, ::step] if step > 1 else stretched
+        self.overview_img.setImage(
+            overview_data,
+            axisOrder="row-major",
+            rect=QRectF(0, 0, self._raster_w, self._raster_h),
+        )
 
         if reset_view:
             self.view_box.setRange(xRange=(0, self._raster_w), yRange=(0, self._raster_h), padding=0.02)
@@ -133,7 +160,9 @@ class MainViewWidget(QWidget):
         self._update_extent_box()
 
     def clear(self) -> None:
-        """Clear raster canvas and overview window completely."""
+        """Clear raster canvas, overlays, and overview window completely."""
+        self.stop_drawing_polygon()
+        self.clear_roi_overlays()
         self._raw_data = None
         self._raster_w = 0
         self._raster_h = 0
@@ -141,13 +170,99 @@ class MainViewWidget(QWidget):
         self.overview_img.clear()
         self.extent_roi.setVisible(False)
 
+    def start_drawing_polygon(self, color: str = "#00ffcc") -> None:
+        """Enter interactive polygon drawing mode."""
+        self._is_drawing_roi = True
+        self._roi_draw_color = color
+        self._current_poly_pts.clear()
+
+        if self._drawing_curve and self._drawing_curve in self.view_box.addedItems:
+            self.view_box.removeItem(self._drawing_curve)
+        if self._rubber_curve and self._rubber_curve in self.view_box.addedItems:
+            self.view_box.removeItem(self._rubber_curve)
+
+        self._drawing_curve = pg.PlotDataItem(
+            [], [], pen=pg.mkPen(color=color, width=2), symbol="o", symbolSize=6, symbolBrush=color
+        )
+        self.view_box.addItem(self._drawing_curve)
+
+        self._rubber_curve = pg.PlotCurveItem([], [], pen=pg.mkPen(color=color, width=1.5, style=Qt.DashLine))
+        self.view_box.addItem(self._rubber_curve)
+        self.setCursor(Qt.CrossCursor)
+        event_bus.status_message.emit("ROI Polygon: Left-click to add vertex, Right-click to close polygon", 5000)
+
+    def stop_drawing_polygon(self) -> None:
+        """Exit polygon drawing mode and clean up rubber band line."""
+        self._is_drawing_roi = False
+        self.setCursor(Qt.ArrowCursor)
+        if self._drawing_curve and self._drawing_curve in self.view_box.addedItems:
+            self.view_box.removeItem(self._drawing_curve)
+            self._drawing_curve = None
+        if self._rubber_curve and self._rubber_curve in self.view_box.addedItems:
+            self.view_box.removeItem(self._rubber_curve)
+            self._rubber_curve = None
+
+    def add_roi_overlay(self, points: List[Tuple[float, float]], color: str = "#00ffcc") -> None:
+        """Render a finished closed ROI polygon on the canvas."""
+        if len(points) < 3:
+            return
+        xs = [p[0] for p in points] + [points[0][0]]
+        ys = [p[1] for p in points] + [points[0][1]]
+        item = pg.PlotDataItem(
+            xs, ys, pen=pg.mkPen(color=color, width=2), symbol="o", symbolSize=5, symbolBrush=color
+        )
+        self.view_box.addItem(item)
+        self._roi_items.append(item)
+
+    def clear_roi_overlays(self) -> None:
+        """Clear all drawn ROI overlays from canvas."""
+        for item in self._roi_items:
+            if item in self.view_box.addedItems:
+                self.view_box.removeItem(item)
+        self._roi_items.clear()
+
+    def remove_roi_overlay(self, index: int) -> None:
+        """Remove a single ROI item by index."""
+        if 0 <= index < len(self._roi_items):
+            item = self._roi_items.pop(index)
+            if item in self.view_box.addedItems:
+                self.view_box.removeItem(item)
+
+    def redraw_rois(self, rois: list) -> None:
+        """Clear and redraw all ROIs (polygons and bounding boxes)."""
+        self.clear_roi_overlays()
+        for roi in rois:
+            if hasattr(roi, "polygon_points") and roi.polygon_points and len(roi.polygon_points) >= 3:
+                self.add_roi_overlay(roi.polygon_points, color=roi.color)
+            elif hasattr(roi, "bbox") and roi.bbox is not None:
+                x0, y0, x1, y1 = roi.bbox
+                box_pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                self.add_roi_overlay(box_pts, color=roi.color)
+
+    def save_view_image(self, output_path: str) -> bool:
+        """Export the currently active stretched raster display to PNG/JPEG/BMP."""
+        if self._raw_data is None:
+            return False
+        stretched = apply_stretch(self._raw_data, mode=self._stretch_mode)
+        from PIL import Image
+        pil_img = Image.fromarray(stretched)
+        pil_img.save(output_path)
+        return True
+
     def set_stretch_mode(self, mode: str) -> None:
         """Update contrast stretch mode and refresh display."""
         self._stretch_mode = mode
         if self._raw_data is not None:
             stretched = apply_stretch(self._raw_data, mode=self._stretch_mode)
             self.image_item.setImage(stretched, axisOrder="row-major")
-            self.overview_img.setImage(stretched, axisOrder="row-major")
+
+            step = max(1, max(self._raster_h, self._raster_w) // 400)
+            overview_data = stretched[::step, ::step] if step > 1 else stretched
+            self.overview_img.setImage(
+                overview_data,
+                axisOrder="row-major",
+                rect=QRectF(0, 0, self._raster_w, self._raster_h),
+            )
 
     def zoom_in(self) -> None:
         """Zoom in by 25%."""
@@ -171,14 +286,41 @@ class MainViewWidget(QWidget):
         if 0 <= x < self._raster_w and 0 <= y < self._raster_h:
             event_bus.pixel_hovered.emit(x, y)
 
+        if self._is_drawing_roi and self._current_poly_pts and self._rubber_curve:
+            last_x, last_y = self._current_poly_pts[-1]
+            self._rubber_curve.setData([last_x, mouse_point.x()], [last_y, mouse_point.y()])
+
     def _on_image_clicked(self, event) -> None:
         """Handle mouse click on the image canvas."""
+        pos = event.pos()
+        fx = float(pos.x())
+        fy = float(pos.y())
+
+        if self._is_drawing_roi:
+            if event.button() == Qt.LeftButton:
+                if 0 <= fx < self._raster_w and 0 <= fy < self._raster_h:
+                    self._current_poly_pts.append((fx, fy))
+                    xs = [p[0] for p in self._current_poly_pts]
+                    ys = [p[1] for p in self._current_poly_pts]
+                    if self._drawing_curve:
+                        self._drawing_curve.setData(xs, ys)
+                    event.accept()
+                    return
+            elif event.button() == Qt.RightButton or event.double():
+                if len(self._current_poly_pts) >= 3:
+                    completed_pts = list(self._current_poly_pts)
+                    color = self._roi_draw_color
+                    self.stop_drawing_polygon()
+                    self.add_roi_overlay(completed_pts, color=color)
+                    self.polygon_roi_completed.emit(completed_pts)
+                    event.accept()
+                    return
+
         if event.button() == Qt.LeftButton:
-            pos = event.pos()
-            x = int(pos.x())
-            y = int(pos.y())
-            if 0 <= x < self._raster_w and 0 <= y < self._raster_h:
-                event_bus.pixel_clicked.emit(x, y)
+            ix = int(fx)
+            iy = int(fy)
+            if 0 <= ix < self._raster_w and 0 <= iy < self._raster_h:
+                event_bus.pixel_clicked.emit(ix, iy)
         event.accept()
 
     def _on_main_view_range_changed(self) -> None:

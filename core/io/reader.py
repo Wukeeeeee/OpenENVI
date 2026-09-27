@@ -9,22 +9,44 @@ from typing import Optional
 from core.io.base import BaseRasterReader
 from core.io.envi import ENVIRasterReader
 from core.io.geotiff import GeoTIFFRasterReader
+from core.io.landsat import LandsatMTLReader
 
 
 def open_raster(file_path: str) -> BaseRasterReader:
     """Open and return a raster reader for the specified file.
 
     Args:
-        file_path: Path to the image or header file.
+        file_path: Path to the image, header, or satellite metadata file.
 
     Returns:
-        Instance of BaseRasterReader (ENVIRasterReader or GeoTIFFRasterReader).
+        Instance of BaseRasterReader (ENVIRasterReader, GeoTIFFRasterReader, or LandsatMTLReader).
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Raster file not found: {file_path}")
 
+    # Check if a directory was passed (e.g. uncompressed Landsat package folder)
+    if os.path.isdir(file_path):
+        for fname in os.listdir(file_path):
+            if fname.lower().endswith(("_mtl.txt", "mtl.txt")):
+                return LandsatMTLReader(os.path.join(file_path, fname))
+        raise ValueError(f"Directory '{file_path}' does not contain recognized satellite metadata (*_MTL.txt).")
+
     base, ext = os.path.splitext(file_path)
     ext_lower = ext.lower()
+
+    # Landsat Product Metadata (*_MTL.txt)
+    if file_path.lower().endswith(("_mtl.txt", "mtl.txt")):
+        return LandsatMTLReader(file_path)
+
+    if ext_lower == ".txt":
+        # Peek at text header to identify Landsat metadata
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                header_head = f.read(512)
+            if "GROUP = L1_METADATA_FILE" in header_head or "LANDSAT_PRODUCT_ID" in header_head:
+                return LandsatMTLReader(file_path)
+        except Exception:
+            pass
 
     # Direct ENVI header
     if ext_lower == ".hdr":

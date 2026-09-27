@@ -41,6 +41,7 @@ class RasterMetadata:
     nodata: Optional[float] = None
     band_details: List[BandInfo] = field(default_factory=list)
     raw_header: Dict[str, Any] = field(default_factory=dict)
+    default_bands: Optional[Tuple[int, ...]] = None
 
     @property
     def samples(self) -> int:

@@ -136,6 +136,14 @@ class DataManagerDock(QDockWidget):
                 band_item = QTreeWidgetItem(file_item, [f"Band {i + 1}"])
                 band_item.setData(0, Qt.UserRole, ("band", layer.layer_id, i))
 
+        if layer.metadata.default_bands and len(layer.metadata.default_bands) == 3:
+            r, g, b = layer.metadata.default_bands
+            self._selected_layer_id = layer.layer_id
+            self._rgb_bands = [r, g, b]
+            self.lbl_r.setText(f"R: Band {r + 1}")
+            self.lbl_g.setText(f"G: Band {g + 1}")
+            self.lbl_b.setText(f"B: Band {b + 1}")
+
     def remove_dataset(self, layer_id: str) -> None:
         """Remove a dataset item and its bands from the Data Manager tree."""
         root = self.tree.invisibleRootItem()
@@ -148,9 +156,12 @@ class DataManagerDock(QDockWidget):
 
     def _on_mode_toggled(self) -> None:
         """Toggle between Grayscale and RGB mode."""
+        from core.i18n import tr
         is_rgb = self.rb_rgb.isChecked()
         self.rgb_box.setVisible(is_rgb)
-        self.btn_load.setText("Load RGB" if is_rgb else "Load Band")
+        self.btn_load.setText(
+            tr("data_manager.btn_load_rgb") if is_rgb else tr("data_manager.btn_load_band")
+        )
         self._next_rgb_slot = 0
 
     def _on_band_clicked(self, item: QTreeWidgetItem, column: int) -> None:
