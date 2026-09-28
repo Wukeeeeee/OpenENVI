@@ -63,11 +63,20 @@ def test_full_workflow(qapp, sample_dataset):
     # 2. Verify Grayscale and RGB display
     window.load_grayscale_band(layer.layer_id, 3)
     assert layer.display_mode == "grayscale"
-    assert window.main_view._raw_data.shape == (32, 32)
+    # _raw_data is released immediately after display (memory optimisation); verify via image_item
+    assert window.main_view._raw_data is None
+    img = window.main_view.image_item.image
+    assert img is not None
+    # pyqtgraph stores images transposed: (W, H) for grayscale
+    assert img.shape[0] == 32 and img.shape[1] == 32
 
     window.load_rgb_composition(layer.layer_id, 0, 1, 2)
     assert layer.display_mode == "rgb"
-    assert window.main_view._raw_data.shape == (32, 32, 3)
+    assert window.main_view._raw_data is None
+    img = window.main_view.image_item.image
+    assert img is not None
+    # pyqtgraph stores RGB as (W, H, C)
+    assert img.shape[0] == 32 and img.shape[1] == 32 and img.shape[2] == 3
 
     # 3. Dynamic Contrast Stretch
     window._on_stretch_changed("Linear 5%")
@@ -157,7 +166,8 @@ def test_full_workflow(qapp, sample_dataset):
     # Only original layer remains
     assert len(window._layers) == 1
     assert window._active_layer_id == layer.layer_id
-    assert window.main_view._raw_data is not None
+    # _raw_data is always released after display; verify canvas still has content via image_item
+    assert window.main_view.image_item.image is not None
 
     # Remove remaining layer -> Canvas, overview, and status bar must clear completely
     window._on_layer_removed(layer.layer_id)

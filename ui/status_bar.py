@@ -159,7 +159,7 @@ class OpenENVIStatusBar(QStatusBar):
             self._lbl_pixel_values.setText(f"{prefix}: [{val_str}]")
         else:
             val_str = ", ".join(f"{v:.2f}" for v in values[:3])
-            bands_label = "波段" if i18n.current_language == "zh" else "bands"
+            bands_label = tr("status.bands_suffix")
             self._lbl_pixel_values.setText(f"{prefix}: [{val_str}, ... ({len(values)} {bands_label})]")
 
     @Slot(str, int)

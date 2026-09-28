@@ -8,7 +8,7 @@ interactive algorithm dialogs, and real-time cursor/spectral probing.
 import os
 from typing import Dict, List, Optional, Tuple
 import numpy as np
-from PySide6.QtCore import QSettings, Qt, Slot
+from PySide6.QtCore import QSettings, Qt, Slot, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -60,6 +60,13 @@ class OpenENVIMainWindow(QMainWindow):
         self._readers: Dict[str, BaseRasterReader] = {}
         self._layers: Dict[str, RasterLayer] = {}
         self._active_layer_id: Optional[str] = None
+
+        # Pixel hover debounce timer (16ms) to prevent Landsat/multiband I/O storms
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(16)
+        self._hover_timer.timeout.connect(self._do_pixel_hover)
+        self._pending_hover_coords: Optional[Tuple[int, int]] = None
 
         # Restore saved language preference before building UI
         settings = QSettings("OpenENVI", "OpenENVI")
@@ -410,7 +417,7 @@ class OpenENVIMainWindow(QMainWindow):
             else:
                 self.load_grayscale_band(layer_id, 0)
 
-            event_bus.status_message.emit(f"Opened: {layer.name}", 3000)
+            event_bus.status_message.emit(tr("status.msg_opened").format(name=layer.name), 3000)
             return layer
         except Exception as e:
             if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
@@ -476,7 +483,11 @@ class OpenENVIMainWindow(QMainWindow):
 
     @Slot(str, int)
     def load_grayscale_band(self, layer_id: str, band_idx: int) -> None:
-        """Load and display a single band in grayscale."""
+        """Load and display a single band in grayscale.
+
+        The resulting stretched uint8 image is cached on the RasterLayer so that
+        switching back to this layer later is instantaneous (no disk re-read).
+        """
         if layer_id not in self._readers:
             return
         reader = self._readers[layer_id]
@@ -484,17 +495,27 @@ class OpenENVIMainWindow(QMainWindow):
         self._active_layer_id = layer_id
 
         layer = self._layers[layer_id]
+        bands_changed = layer.active_bands != (band_idx,) or layer.display_mode != "grayscale"
         layer.display_mode = "grayscale"
         layer.active_bands = (band_idx,)
+        if bands_changed:
+            layer.invalidate_display_cache()
         self.dock_layer_manager.update_layer_display_mode(layer_id, "grayscale")
 
         self.main_view.display_raster(band_data, reset_view=False)
+        # Cache the rendered result for fast layer switching
+        if self.main_view.image_item.image is not None:
+            layer.set_display_cache(self.main_view.image_item.image, self.main_view._stretch_mode)
         self.main_view.redraw_rois(getattr(layer, "rois", []))
         event_bus.status_message.emit(f"Displaying: {layer.name} [Band {band_idx + 1}]", 2000)
 
     @Slot(str, int, int, int)
     def load_rgb_composition(self, layer_id: str, r: int, g: int, b: int) -> None:
-        """Load and display a 3-band RGB color composite."""
+        """Load and display a 3-band RGB color composite.
+
+        The resulting stretched uint8 image is cached on the RasterLayer so that
+        switching back to this layer later is instantaneous (no disk re-read).
+        """
         if layer_id not in self._readers:
             return
         reader = self._readers[layer_id]
@@ -528,22 +549,46 @@ class OpenENVIMainWindow(QMainWindow):
 
         self._active_layer_id = layer_id
         layer = self._layers[layer_id]
+        bands_changed = layer.active_bands != (r, g, b) or layer.display_mode != "rgb"
         layer.display_mode = "rgb"
         layer.active_bands = (r, g, b)
+        if bands_changed:
+            layer.invalidate_display_cache()
         self.dock_layer_manager.update_layer_display_mode(layer_id, "rgb")
 
         self.main_view.display_raster(rgb_cube, reset_view=False)
+        # Cache the rendered result for fast layer switching
+        if self.main_view.image_item.image is not None:
+            layer.set_display_cache(self.main_view.image_item.image, self.main_view._stretch_mode)
         self.main_view.redraw_rois(getattr(layer, "rois", []))
         event_bus.status_message.emit(
             f"Displaying: {layer.name} [RGB: {r+1}, {g+1}, {b+1}]", 2000
         )
 
     def _on_active_layer_changed(self, layer_id: str) -> None:
-        """Handle layer activation from Layer Manager."""
-        if layer_id in self._layers:
-            self._active_layer_id = layer_id
-            layer = self._layers[layer_id]
+        """Handle layer activation from Layer Manager.
+
+        Uses the per-layer display cache to restore the canvas instantly when
+        switching between already-loaded layers, avoiding a full re-read from disk.
+        """
+        if layer_id not in self._layers:
+            return
+        self._active_layer_id = layer_id
+        layer = self._layers[layer_id]
+        if not layer.is_visible:
+            return
+        # Try fast path: restore from display cache
+        cached = layer.get_display_cache(self.main_view._stretch_mode)
+        if cached is not None:
+            self.main_view.restore_display_cache(cached)
             self.main_view.redraw_rois(getattr(layer, "rois", []))
+            return
+        # Slow path: re-read from reader (cache miss or stretch mode changed)
+        if layer.display_mode == "rgb" and len(layer.active_bands) == 3:
+            r, g, b = layer.active_bands
+            self.load_rgb_composition(layer_id, r, g, b)
+        elif layer.active_bands:
+            self.load_grayscale_band(layer_id, layer.active_bands[0])
 
     def _on_roi_visibility_changed(self, layer_id: str, roi_id: str, is_visible: bool) -> None:
         """Toggle individual ROI visibility from Layer Manager."""
@@ -595,6 +640,7 @@ class OpenENVIMainWindow(QMainWindow):
             self._readers[layer_id].close()
             del self._readers[layer_id]
         if layer_id in self._layers:
+            self._layers[layer_id].invalidate_display_cache()
             del self._layers[layer_id]
 
         import gc
@@ -622,18 +668,30 @@ class OpenENVIMainWindow(QMainWindow):
                 self.main_view.clear()
                 self.dock_spectral_profile.clear_spectrum()
                 self.status_bar.clear()
-        event_bus.status_message.emit("Layer removed", 2000)
+        event_bus.status_message.emit(tr("status.msg_layer_removed"), 2000)
 
     @Slot(int, int)
     def _on_pixel_hovered(self, x: int, y: int) -> None:
-        """Handle cursor movement over raster coordinates."""
+        """Handle cursor movement over raster coordinates with 16ms debounce."""
+        self._pending_hover_coords = (x, y)
+        if not self._hover_timer.isActive():
+            self._hover_timer.start()
+
+    def _do_pixel_hover(self) -> None:
+        """Execute debounced hover processing: coordinate projection and spectral sampling."""
+        if not self._pending_hover_coords:
+            return
+        x, y = self._pending_hover_coords
         if not self._active_layer_id or self._active_layer_id not in self._readers:
             return
 
         reader = self._readers[self._active_layer_id]
-        geo_x, geo_y = reader.pixel_to_geo(x, y)
-        crs_str = reader.metadata.crs if hasattr(reader, "metadata") and reader.metadata else None
-        self.status_bar.update_geo_coords(geo_x, geo_y, crs_str=crs_str)
+        try:
+            geo_x, geo_y = reader.pixel_to_geo(x, y)
+            crs_str = reader.metadata.crs if hasattr(reader, "metadata") and reader.metadata else None
+            self.status_bar.update_geo_coords(geo_x, geo_y, crs_str=crs_str)
+        except Exception:
+            pass
 
         # Read active pixel values
         try:
@@ -729,15 +787,8 @@ class OpenENVIMainWindow(QMainWindow):
         dlg.exec()
 
     def _on_raster_exported(self, file_path: str) -> None:
-        """Handle completion of raster export by optionally loading exported file."""
-        reply = QMessageBox.question(
-            self,
-            "Open Exported Raster",
-            f"Raster saved successfully:\n{file_path}\n\nWould you like to load it into OpenENVI now?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if reply == QMessageBox.Yes:
+        """Handle completion of raster export by loading exported file."""
+        if file_path and os.path.exists(file_path):
             self.open_raster_file(file_path)
 
     def show_pansharpen_dialog(self) -> None:
@@ -1053,8 +1104,26 @@ class OpenENVIMainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _on_stretch_changed(self, mode: str) -> None:
-        """Handle contrast stretch mode change."""
-        event_bus.stretch_mode_changed.emit(mode)
+        """Handle contrast stretch mode change.
+
+        Updates the stretch mode on the view, invalidates the display cache on
+        all loaded layers so layer switching reflects the new stretch mode, then
+        re-loads the active layer's currently selected bands from the reader.
+        """
+        self.main_view._stretch_mode = mode
+        for layer in self._layers.values():
+            layer.invalidate_display_cache()
+
+        if not self._active_layer_id or self._active_layer_id not in self._layers:
+            return
+        layer = self._layers[self._active_layer_id]
+        if not layer.is_visible:
+            return
+        if layer.display_mode == "rgb" and len(layer.active_bands) == 3:
+            r, g, b = layer.active_bands
+            self.load_rgb_composition(self._active_layer_id, r, g, b)
+        elif layer.active_bands:
+            self.load_grayscale_band(self._active_layer_id, layer.active_bands[0])
 
     def _on_open_file_dialog(self) -> None:
         """Open raster file dialog."""

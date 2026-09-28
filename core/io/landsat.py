@@ -138,7 +138,7 @@ class LandsatMTLReader(BaseRasterReader):
         self._datasets[0] = self._ref_dataset
 
         crs_str = self._ref_dataset.crs.to_string() if self._ref_dataset.crs else None
-        transform_tuple = tuple(self._ref_dataset.transform) if self._ref_dataset.transform else None
+        transform_obj = self._ref_dataset.transform if self._ref_dataset.transform else None
 
         # Build raw header dictionary containing calibration attributes
         raw_header = {
@@ -160,7 +160,7 @@ class LandsatMTLReader(BaseRasterReader):
             bands=len(self._band_paths),
             dtype="float32",
             crs=crs_str,
-            transform=transform_tuple,
+            transform=transform_obj,
             interleave="BSQ",
             nodata=float(self._ref_dataset.nodata) if self._ref_dataset.nodata is not None else 0.0,
             band_details=discovered_bands,
@@ -179,10 +179,16 @@ class LandsatMTLReader(BaseRasterReader):
         return self._datasets[band_index]
 
     def read_band(self, band_index: int) -> np.ndarray:
-        """Read a single 2D band slice (height, width) as float32."""
+        """Read a single 2D band slice (height, width) as float32.
+
+        Uses rasterio's ``out=`` parameter to decode directly into a pre-allocated
+        float32 buffer, eliminating the intermediate uint16/uint8 copy (saves
+        ~110 MB per band on a full Landsat scene).
+        """
         ds = self._get_dataset(band_index)
-        band_data = ds.read(1)
-        return band_data.astype(np.float32)
+        buf = np.empty((ds.height, ds.width), dtype=np.float32)
+        ds.read(1, out=buf)  # rasterio converts source dtype → float32 in-place
+        return buf
 
     def read_pixel_profile(self, x: int, y: int) -> np.ndarray:
         """Read spectral profile across all packaged bands at (x, y) using 1x1 window."""

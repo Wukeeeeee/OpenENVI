@@ -75,3 +75,26 @@ class RasterLayer:
     active_bands: Tuple[int, ...] = (0,)  # (gray,) or (r, g, b)
     rois: list = field(default_factory=list)
 
+    # Display cache: stores the last stretched uint8 image so that switching
+    # back to a layer avoids a full re-read from disk.  Cleared whenever the
+    # selected bands or stretch mode changes.  Field excluded from repr to
+    # avoid printing potentially large arrays.
+    _display_cache: Optional["np.ndarray"] = field(default=None, repr=False)
+    _cache_stretch_mode: Optional[str] = field(default=None, repr=False)
+
+    def get_display_cache(self, stretch_mode: str) -> "Optional[np.ndarray]":
+        """Return cached display image if it matches the requested stretch mode."""
+        if self._display_cache is not None and self._cache_stretch_mode == stretch_mode:
+            return self._display_cache
+        return None
+
+    def set_display_cache(self, image: "np.ndarray", stretch_mode: str) -> None:
+        """Store a stretched uint8 display image for later reuse."""
+        self._display_cache = image
+        self._cache_stretch_mode = stretch_mode
+
+    def invalidate_display_cache(self) -> None:
+        """Discard the cached display image (e.g. after band or stretch change)."""
+        self._display_cache = None
+        self._cache_stretch_mode = None
+

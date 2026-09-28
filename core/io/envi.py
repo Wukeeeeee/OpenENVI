@@ -297,7 +297,12 @@ class ENVIRasterReader(BaseRasterReader):
         else:
             slice_data = self._memmap[band_index, :, :]
 
-        return np.array(slice_data, dtype=np.float32)
+        # Return a zero-copy view when the memmap is already float32; only copy when a
+        # dtype conversion is actually needed.  On a 7691×7531 scene this avoids
+        # allocating an extra 221 MB per band during RGB composition.
+        if slice_data.dtype == np.float32:
+            return np.asarray(slice_data)  # zero-copy view into memmap
+        return slice_data.astype(np.float32)  # copy only when dtype differs
 
     def read_pixel_profile(self, x: int, y: int) -> np.ndarray:
         """Read spectral profile across all bands at (x, y)."""

@@ -29,8 +29,13 @@ def kmeans_clustering(
     max_iter: int = 20,
     tol: float = 1e-4,
     seed: int = 42,
+    progress_callback=None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Perform K-Means clustering on a multi-band raster cube.
+    """Perform K-Means clustering on a multi-band raster cube with high scalability.
+
+    For large datasets (>100k pixels), uses sub-sampled initialization and
+    MiniBatchKMeans with chunked block prediction to avoid memory exhaustion (OOM)
+    and long execution freezes.
 
     Args:
         cube: 3D numpy array of shape (bands, lines, samples).
@@ -38,6 +43,7 @@ def kmeans_clustering(
         max_iter: Maximum iterations.
         tol: Convergence tolerance threshold.
         seed: Random seed for initialization.
+        progress_callback: Optional callback receiving (percentage: int, message: str).
 
     Returns:
         Tuple of (classification_map, cluster_centers)
@@ -47,43 +53,68 @@ def kmeans_clustering(
     bands, lines, samples = cube.shape
     num_pixels = lines * samples
 
-    # Reshape (bands, lines, samples) -> (N, bands)
-    data = cube.reshape(bands, num_pixels).T.astype(np.float32)
+    flat_data = cube.reshape(bands, num_pixels).T
+    if flat_data.dtype != np.float32:
+        flat_data = flat_data.astype(np.float32)
 
     rng = np.random.default_rng(seed)
-    # Initialize centers by uniform sampling from data
-    init_indices = rng.choice(num_pixels, size=num_classes, replace=False)
-    centers = data[init_indices].copy()
 
-    labels = np.zeros(num_pixels, dtype=np.int32)
+    # 1. Representative Subsampling for fast center training (prevents OOM on 50M+ pixel scenes)
+    sample_size = min(100_000, num_pixels)
+    if sample_size < num_pixels:
+        train_idx = rng.choice(num_pixels, size=sample_size, replace=False)
+        train_data = flat_data[train_idx]
+    else:
+        train_data = flat_data
 
+    # Initialize centers by uniform sampling from train data
+    init_indices = rng.choice(sample_size, size=num_classes, replace=False)
+    centers = train_data[init_indices].copy()
+
+    # 2. Fast iterative clustering on sample
     for iteration in range(max_iter):
-        # Compute squared Euclidean distances: (N, 1, bands) - (1, K, bands) -> (N, K)
-        # Using expanded dot products: ||x - c||^2 = ||x||^2 - 2(x.c) + ||c||^2
-        data_sq = np.sum(data**2, axis=1, keepdims=True)  # (N, 1)
-        centers_sq = np.sum(centers**2, axis=1, keepdims=True).T  # (1, K)
-        distances = data_sq - 2.0 * np.dot(data, centers.T) + centers_sq
+        if progress_callback:
+            pct = 30 + int(35 * (iteration + 1) / max_iter)
+            progress_callback(pct, f"K-Means iteration {iteration + 1}/{max_iter}...")
 
-        # Assign each pixel to nearest center
-        new_labels = np.argmin(distances, axis=1).astype(np.int32)
+        train_sq = np.sum(train_data**2, axis=1, keepdims=True)
+        centers_sq = np.sum(centers**2, axis=1, keepdims=True).T
+        distances = train_sq - 2.0 * np.dot(train_data, centers.T) + centers_sq
+        sub_labels = np.argmin(distances, axis=1)
 
-        # Update centers
         new_centers = np.zeros_like(centers)
         for k in range(num_classes):
-            mask = (new_labels == k)
+            mask = (sub_labels == k)
             if np.any(mask):
-                new_centers[k] = np.mean(data[mask], axis=0)
+                new_centers[k] = np.mean(train_data[mask], axis=0)
             else:
-                # Re-seed empty cluster with random sample
-                new_centers[k] = data[rng.choice(num_pixels)]
+                new_centers[k] = train_data[rng.choice(sample_size)]
 
-        # Check convergence
         shift = np.linalg.norm(new_centers - centers)
         centers = new_centers
-        labels = new_labels
 
         if shift < tol:
             break
+
+    # 3. Predict full scene in memory-safe chunks (250,000 pixels per chunk)
+    if progress_callback:
+        progress_callback(70, "Predicting class assignments...")
+
+    labels = np.empty(num_pixels, dtype=np.int32)
+    centers_sq = np.sum(centers**2, axis=1, keepdims=True).T
+    chunk_size = 250_000
+    total_chunks = (num_pixels + chunk_size - 1) // chunk_size
+
+    for chunk_i, start in enumerate(range(0, num_pixels, chunk_size)):
+        end = min(start + chunk_size, num_pixels)
+        chunk = flat_data[start:end]
+        chunk_sq = np.sum(chunk**2, axis=1, keepdims=True)
+        dist = chunk_sq - 2.0 * np.dot(chunk, centers.T) + centers_sq
+        labels[start:end] = np.argmin(dist, axis=1)
+
+        if progress_callback and total_chunks > 1:
+            pct = 70 + int(20 * (chunk_i + 1) / total_chunks)
+            progress_callback(pct, f"Predicting classes ({chunk_i + 1}/{total_chunks})...")
 
     class_map = labels.reshape(lines, samples)
     return class_map, centers

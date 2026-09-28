@@ -175,6 +175,11 @@ class ExportRasterDialog(QDialog):
         lay_dest.addWidget(self.btn_browse)
         main_layout.addWidget(grp_dest)
 
+        # Autoload checkbox
+        self.chk_autoload = QCheckBox(tr("dialog.export.chk_autoload") if tr("dialog.export.chk_autoload") != "dialog.export.chk_autoload" else "Load exported raster into OpenENVI upon completion")
+        self.chk_autoload.setChecked(True)
+        main_layout.addWidget(self.chk_autoload)
+
         # 5. Progress Bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -211,7 +216,14 @@ class ExportRasterDialog(QDialog):
         for b in range(meta.bands):
             b_name = f"Band {b + 1}"
             if meta.band_details and b < len(meta.band_details):
-                b_name = meta.band_details[b].name or b_name
+                b_info = meta.band_details[b]
+                if b_info.wavelength is not None:
+                    if b_info.name:
+                        b_name = f"{b_info.name} ({b_info.wavelength:.1f} {b_info.wavelength_unit})"
+                    else:
+                        b_name = f"Band {b + 1} ({b_info.wavelength:.1f} {b_info.wavelength_unit})"
+                elif b_info.name:
+                    b_name = b_info.name
             item = QListWidgetItem(f"[{b + 1}] {b_name}")
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)
@@ -312,12 +324,14 @@ class ExportRasterDialog(QDialog):
         self.btn_export.setEnabled(True)
         self.btn_cancel.setEnabled(True)
         event_bus.status_message.emit(f"Raster exported to: {out_path}", 4000)
-        QMessageBox.information(
-            self,
-            tr("dialog.export.success_title"),
-            f"{tr('dialog.export.success_msg')}\n\n{out_path}",
-        )
-        self.export_completed.emit(out_path)
+        if self.chk_autoload.isChecked():
+            self.export_completed.emit(out_path)
+        else:
+            QMessageBox.information(
+                self,
+                tr("dialog.export.success_title"),
+                f"{tr('dialog.export.success_msg')}\n\n{out_path}",
+            )
         self.accept()
 
     def _on_export_failed(self, error_msg: str) -> None:

@@ -117,6 +117,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "toolbox.cat_indices": "Indices",
         "toolbox.not_implemented": "Not yet implemented (Coming soon)",
         "toolbox.msg_not_implemented": "This feature is not yet implemented.",
+        "toolbox.msg_tool_selected": "Tool selected: {name}",
 
         # Toolbox Tools
         "toolbox.tool_band_math": "Band Math",
@@ -175,6 +176,9 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "status.prefix_probe": "File [Probe]",
         "status.prefix_geo": "Geo",
         "status.prefix_value": "Value",
+        "status.bands_suffix": "bands",
+        "status.msg_opened": "Opened: {name}",
+        "status.msg_layer_removed": "Layer removed",
 
         # Dialogs - General
         "dialog.open_title": "Open Remote Sensing Image",
@@ -277,6 +281,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.export.err_export_failed": "Export failed",
         "dialog.export.success_title": "Export Successful",
         "dialog.export.success_msg": "Raster dataset was successfully written to:",
+        "dialog.export.chk_autoload": "Load exported raster into OpenENVI upon completion",
 
         # Pan-Sharpening
         "menu.pansharpen": "Pan-Sharpening Fusion...",
@@ -376,6 +381,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "stacking.btn_clear": "Clear All",
         "stacking.out_name": "Output Layer Name:",
         "stacking.err_no_bands": "Please add at least 2 bands to stack.",
+        "stacking.btn_add_all": "Add All >>",
+        "stacking.resample_method": "Resampling Method:",
 
         # Resize Data & Subsetting
         "resize.grp_spatial": "Spatial Subset (Pixel Coordinates)",
@@ -384,11 +391,19 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "resize.start": "Start:",
         "resize.end": "End:",
         "resize.btn_reset": "Reset to Full Scene",
+        "resize.btn_from_roi": "Subset by ROI...",
+        "resize.no_rois_msg": "No ROIs defined on current layer.",
+        "resize.select_roi_title": "Select ROI",
+        "resize.select_roi_prompt": "Choose ROI to define spatial bounding box:",
         "resize.scale_factor": "Resize Scale Factor:",
         "resize.scale_1": "1.0x (Original Resolution)",
         "resize.scale_05": "0.5x (Downsample 2x)",
         "resize.scale_025": "0.25x (Downsample 4x)",
         "resize.scale_2": "2.0x (Upsample 2x)",
+        "resize.resample_method": "Resampling Method:",
+        "resize.method_nearest": "Nearest Neighbor",
+        "resize.method_bilinear": "Bilinear",
+        "resize.method_bicubic": "Bicubic",
         "resize.grp_spectral": "Spectral Subset (Select Bands to Keep)",
         "resize.btn_select_all": "Select All",
         "resize.btn_clear_all": "Clear All",
@@ -604,6 +619,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "toolbox.cat_indices": "波谱指数 (Indices)",
         "toolbox.not_implemented": "该功能尚未实装，敬请期待",
         "toolbox.msg_not_implemented": "该功能尚未实装，敬请期待！",
+        "toolbox.msg_tool_selected": "已选择工具: {name}",
 
         # Toolbox Tools
         "toolbox.tool_band_math": "波段运算 (Band Math)",
@@ -662,6 +678,9 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "status.prefix_probe": "像元 [探针]",
         "status.prefix_geo": "地理坐标",
         "status.prefix_value": "像元值",
+        "status.bands_suffix": "波段",
+        "status.msg_opened": "已打开: {name}",
+        "status.msg_layer_removed": "图层已移除",
 
         # Dialogs - General
         "dialog.open_title": "打开遥感影像文件",
@@ -764,6 +783,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.export.err_export_failed": "导出失败",
         "dialog.export.success_title": "导出成功",
         "dialog.export.success_msg": "栅格数据已成功写入：",
+        "dialog.export.chk_autoload": "导出完成后自动在 OpenENVI 中载入",
 
         # 全色融合
         "menu.pansharpen": "全色波段图像融合 (Pan-Sharpening)...",
@@ -863,6 +883,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "stacking.btn_clear": "清空全部",
         "stacking.out_name": "输出图层名称:",
         "stacking.err_no_bands": "请至少添加 2 个波段进行波段合成。",
+        "stacking.btn_add_all": "全部添加 >>",
+        "stacking.resample_method": "重采样方法：",
 
         # 空间/光谱重采样裁剪
         "resize.grp_spatial": "空间裁剪范围 (像元坐标)",
@@ -871,11 +893,19 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "resize.start": "起始:",
         "resize.end": "终止:",
         "resize.btn_reset": "重置为整幅影像",
+        "resize.btn_from_roi": "按 ROI 范围裁剪...",
+        "resize.no_rois_msg": "当前图层尚未定义任何感兴趣区 (ROI)。",
+        "resize.select_roi_title": "选择感兴趣区 (ROI)",
+        "resize.select_roi_prompt": "选择用于定义空间裁剪外包框的 ROI：",
         "resize.scale_factor": "空间重采样缩放比例:",
         "resize.scale_1": "1.0x (原始分辨率)",
         "resize.scale_05": "0.5x (降采样 2倍)",
         "resize.scale_025": "0.25x (降采样 4倍)",
         "resize.scale_2": "2.0x (上采样 2倍)",
+        "resize.resample_method": "重采样算法：",
+        "resize.method_nearest": "最邻近像元法 (Nearest)",
+        "resize.method_bilinear": "双线性内插法 (Bilinear)",
+        "resize.method_bicubic": "三次卷积法 (Bicubic)",
         "resize.grp_spectral": "光谱子集筛选 (勾选需要保留的波段)",
         "resize.btn_select_all": "全选",
         "resize.btn_clear_all": "清除",

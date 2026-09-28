@@ -45,12 +45,28 @@ class MemoryRasterReader(BaseRasterReader):
         """Create metadata for the in-memory array."""
         bands, lines, samples = self._cube.shape
 
-        band_details = []
-        for i in range(bands):
-            band_details.append(BandInfo(index=i, name=f"Component {i + 1}"))
+        if self._parent_meta and self._parent_meta.band_details and len(self._parent_meta.band_details) == bands:
+            band_details = list(self._parent_meta.band_details)
+        else:
+            band_details = []
+            for i in range(bands):
+                b_name = f"Band {i + 1}"
+                wl = None
+                wl_unit = "nm"
+                fwhm = None
+                if self._parent_meta and self._parent_meta.band_details and i < len(self._parent_meta.band_details):
+                    p_info = self._parent_meta.band_details[i]
+                    b_name = p_info.name or b_name
+                    wl = p_info.wavelength
+                    wl_unit = p_info.wavelength_unit
+                    fwhm = p_info.fwhm
+                band_details.append(BandInfo(index=i, name=b_name, wavelength=wl, wavelength_unit=wl_unit, fwhm=fwhm))
 
         crs = self._parent_meta.crs if self._parent_meta else None
         transform = self._parent_meta.transform if self._parent_meta else None
+        nodata = self._parent_meta.nodata if self._parent_meta else None
+        raw_header = dict(self._parent_meta.raw_header) if self._parent_meta and self._parent_meta.raw_header else {}
+        default_bands = self._parent_meta.default_bands if self._parent_meta else None
 
         meta = RasterMetadata(
             width=samples,
@@ -60,7 +76,10 @@ class MemoryRasterReader(BaseRasterReader):
             crs=crs,
             transform=transform,
             interleave="BSQ",
+            nodata=nodata,
             band_details=band_details,
+            raw_header=raw_header,
+            default_bands=default_bands,
         )
         return meta
 
@@ -77,9 +96,19 @@ class MemoryRasterReader(BaseRasterReader):
     def pixel_to_geo(self, x: int, y: int) -> Tuple[Optional[float], Optional[float]]:
         """Return parent geospatial coordinates if available."""
         if self._parent_meta and self._parent_meta.transform:
-            import rasterio.transform
-            geo_x, geo_y = rasterio.transform.xy(self._parent_meta.transform, y, x, offset="center")
-            return float(geo_x), float(geo_y)
+            try:
+                import rasterio.transform
+                from affine import Affine
+                t = self._parent_meta.transform
+                if isinstance(t, (tuple, list)):
+                    if len(t) == 6:
+                        t = Affine(*t)
+                    elif len(t) == 9:
+                        t = Affine(t[0], t[1], t[2], t[3], t[4], t[5])
+                geo_x, geo_y = rasterio.transform.xy(t, y, x, offset="center")
+                return float(geo_x), float(geo_y)
+            except Exception:
+                return None, None
         return None, None
 
     def close(self) -> None:

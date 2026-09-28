@@ -44,6 +44,11 @@ def export_raster(
     Returns:
         The normalized absolute output path of the created file.
     """
+    # If user provided .hdr as target path for ENVI, redirect binary data to .dat
+    base, ext = os.path.splitext(output_path)
+    if format.upper() in ("ENVI", "HDR") and ext.lower() == ".hdr":
+        output_path = base + ".dat"
+
     output_path = os.path.abspath(output_path)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -70,8 +75,13 @@ def export_raster(
 
     # Normalize Transform
     transform_obj = None
-    if meta.transform and len(meta.transform) >= 6:
-        transform_obj = Affine(*meta.transform[:6])
+    if isinstance(meta.transform, Affine):
+        transform_obj = meta.transform
+    elif meta.transform and hasattr(meta.transform, "__len__") and len(meta.transform) >= 6:
+        try:
+            transform_obj = Affine(*meta.transform[:6])
+        except Exception:
+            transform_obj = None
 
     # Determine driver
     driver = "ENVI" if format.upper() in ("ENVI", "HDR") else "GTiff"
@@ -87,10 +97,9 @@ def export_raster(
         "transform": transform_obj,
     }
 
-    if nodata is not None:
-        creation_options["nodata"] = nodata
-    elif meta.nodata is not None:
-        creation_options["nodata"] = meta.nodata
+    effective_nodata = nodata if nodata is not None else meta.nodata
+    if effective_nodata is not None:
+        creation_options["nodata"] = effective_nodata
 
     if driver == "GTiff":
         if compress and compress.lower() not in ("none", "no"):
@@ -105,8 +114,14 @@ def export_raster(
         for out_idx, b_idx in enumerate(band_indices):
             band_array = reader.read_band(b_idx)
 
-            # Cast data type if requested
+            # Cast data type if requested with safe NaN/Inf replacement
             if str(band_array.dtype) != out_dtype:
+                if np.issubdtype(band_array.dtype, np.floating) and out_dtype in ("uint8", "uint16", "int16"):
+                    fill_val = effective_nodata if effective_nodata is not None else 0
+                    nan_mask = ~np.isfinite(band_array)
+                    if np.any(nan_mask):
+                        band_array = np.where(nan_mask, fill_val, band_array)
+
                 if out_dtype == "uint8":
                     band_array = np.clip(band_array, 0, 255).astype(np.uint8)
                 elif out_dtype == "uint16":
@@ -119,13 +134,83 @@ def export_raster(
             # Rasterio 1-based band indexing
             dst.write(band_array, out_idx + 1)
 
-            # Set band description if available
+            # Set band description and wavelength tags
+            b_name = f"Band {b_idx + 1}"
+            wl = None
             if meta.band_details and b_idx < len(meta.band_details):
-                b_name = meta.band_details[b_idx].name
-                if b_name:
-                    dst.set_band_description(out_idx + 1, b_name)
+                b_info = meta.band_details[b_idx]
+                b_name = b_info.name or b_name
+                wl = b_info.wavelength
+
+            dst.set_band_description(out_idx + 1, b_name)
+            if wl is not None:
+                try:
+                    dst.update_tags(out_idx + 1, WAVELENGTH=str(wl))
+                except Exception:
+                    pass
 
             if progress_callback:
                 progress_callback(out_idx + 1, total_bands)
 
+    # If ENVI format, enrich .hdr with wavelengths, fwhm, and default bands
+    if driver == "ENVI":
+        hdr_path = os.path.splitext(output_path)[0] + ".hdr"
+        if os.path.exists(hdr_path):
+            _enrich_envi_header(hdr_path, meta, band_indices, effective_nodata)
+
     return output_path
+
+
+def _enrich_envi_header(
+    hdr_path: str,
+    meta,
+    band_indices: List[int],
+    nodata: Optional[float] = None,
+) -> None:
+    """Enrich auto-generated ENVI header with wavelength and metadata fields."""
+    try:
+        with open(hdr_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+
+        additions = []
+
+        # Wavelengths & units
+        if "wavelength =" not in content and meta.band_details:
+            wls = []
+            fwhms = []
+            wl_unit = "nm"
+            for b in band_indices:
+                if b < len(meta.band_details) and meta.band_details[b].wavelength is not None:
+                    wls.append(meta.band_details[b].wavelength)
+                    wl_unit = meta.band_details[b].wavelength_unit or wl_unit
+                    if meta.band_details[b].fwhm is not None:
+                        fwhms.append(meta.band_details[b].fwhm)
+
+            if len(wls) == len(band_indices):
+                unit_str = "Nanometers" if "nm" in wl_unit.lower() else ("Micrometers" if "um" in wl_unit.lower() or "µm" in wl_unit.lower() else wl_unit)
+                additions.append(f"wavelength units = {unit_str}")
+                wl_lines = ",\n ".join(f"{w:.4f}" for w in wls)
+                additions.append(f"wavelength = {{\n {wl_lines}\n}}")
+                if len(fwhms) == len(band_indices):
+                    fwhm_lines = ",\n ".join(f"{f:.4f}" for f in fwhms)
+                    additions.append(f"fwhm = {{\n {fwhm_lines}\n}}")
+
+        # Default bands (1-based for ENVI)
+        if "default bands =" not in content and meta.default_bands:
+            # Map original default bands into 1-based indices in output
+            mapped = []
+            for ob in meta.default_bands:
+                if ob in band_indices:
+                    mapped.append(str(band_indices.index(ob) + 1))
+            if len(mapped) == 3:
+                additions.append(f"default bands = {{ {', '.join(mapped)} }}")
+
+        # Data ignore value (NoData)
+        if "data ignore value" not in content and nodata is not None:
+            additions.append(f"data ignore value = {nodata}")
+
+        if additions:
+            with open(hdr_path, "a", encoding="utf-8") as f:
+                f.write("\n" + "\n".join(additions) + "\n")
+    except Exception:
+        pass

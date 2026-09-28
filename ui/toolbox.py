@@ -210,4 +210,5 @@ class ToolboxDock(QDockWidget):
             return
 
         self.tool_selected.emit(tool_name)
-        event_bus.status_message.emit(f"Tool selected: {tool_name}", 3000)
+        from core.i18n import tr
+        event_bus.status_message.emit(tr("toolbox.msg_tool_selected").format(name=tool_name), 3000)

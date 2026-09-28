@@ -69,3 +69,48 @@ def test_export_raster_envi(tmp_path):
     np.testing.assert_allclose(reopened.read_band(0), b1, rtol=1e-5)
     np.testing.assert_allclose(reopened.read_band(1), b2, rtol=1e-5)
     reopened.close()
+
+
+def test_export_raster_envi_with_wavelengths_and_nans(tmp_path):
+    """Verify that export_raster safely handles NaNs when casting to uint8 and enriches .hdr with wavelengths."""
+    data = np.array([[np.nan, 50.0], [100.0, 250.0]], dtype=np.float32)
+    binfo = [BandInfo(index=0, name="Green", wavelength=560.5, wavelength_unit="nm", fwhm=20.0)]
+    meta = RasterMetadata(
+        width=2,
+        height=2,
+        bands=1,
+        dtype="float32",
+        band_details=binfo,
+        default_bands=(0, 0, 0),
+        nodata=0.0,
+    )
+    reader = MemoryRasterReader(data, parent_metadata=meta)
+
+    out_file = str(tmp_path / "test_nan_envi.dat")
+    res = export_raster(
+        reader=reader,
+        output_path=out_file,
+        format="ENVI",
+        dtype="uint8",
+    )
+
+    assert os.path.exists(res)
+    hdr_path = str(tmp_path / "test_nan_envi.hdr")
+    assert os.path.exists(hdr_path)
+    with open(hdr_path, "r", encoding="utf-8") as f:
+        hdr_txt = f.read()
+
+    # Check wavelength enrichment
+    assert "wavelength" in hdr_txt
+    assert "560.5" in hdr_txt
+    assert "wavelength units = Nanometers" in hdr_txt
+    assert "default bands" in hdr_txt
+
+    # Re-open and verify NaN was safely converted to nodata (0) without crash
+    reopened = open_raster(res)
+    b0 = reopened.read_band(0)
+    assert b0[0, 0] == 0
+    assert b0[0, 1] == 50
+    assert b0[1, 0] == 100
+    assert b0[1, 1] == 250
+    reopened.close()

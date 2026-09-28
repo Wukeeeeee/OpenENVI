@@ -73,12 +73,12 @@ class MainViewWidget(QWidget):
         self.lbl_overview.setStyleSheet("font-size: 10px; color: #8e9297; font-weight: bold;")
         header_layout.addWidget(self.lbl_overview, stretch=1)
 
-        self.btn_toggle_overview = QPushButton("−", self.overview_frame)
-        self.btn_toggle_overview.setFixedSize(16, 16)
+        self.btn_toggle_overview = QPushButton("-", self.overview_frame)
+        self.btn_toggle_overview.setFixedSize(18, 18)
         self.btn_toggle_overview.setCursor(Qt.PointingHandCursor)
         self.btn_toggle_overview.setStyleSheet(
-            "QPushButton { background: transparent; color: #8e9297; border: none; font-size: 12px; font-weight: bold; }"
-            "QPushButton:hover { color: #ffffff; background: #4e535a; border-radius: 2px; }"
+            "QPushButton { background: #36393e; color: #c9d1d9; border: 1px solid #4e535a; border-radius: 2px; font-size: 13px; font-weight: bold; padding: 0px; margin: 0px; text-align: center; line-height: 16px; }"
+            "QPushButton:hover { background: #5865f2; color: #ffffff; border-color: #5865f2; }"
         )
         self.btn_toggle_overview.clicked.connect(self.toggle_overview_collapsed)
         header_layout.addWidget(self.btn_toggle_overview)
@@ -158,7 +158,7 @@ class MainViewWidget(QWidget):
         else:
             self.overview_glw.setVisible(True)
             self.overview_frame.setFixedSize(200, 150)
-            self.btn_toggle_overview.setText("−")
+            self.btn_toggle_overview.setText("-")
             self.btn_toggle_overview.setToolTip(tr("main_view.overview_minimize"))
         self._reposition_overview()
 
@@ -189,14 +189,26 @@ class MainViewWidget(QWidget):
     ) -> None:
         """Display raw 2D (grayscale) or 3D (RGB) raster array with current stretch.
 
+        Memory optimisation
+        -------------------
+        ``raw_data`` is only needed long enough to compute the stretched uint8
+        display array.  After ``apply_stretch`` completes, the reference is
+        dropped so the caller can let the float32 cube be garbage-collected.
+        This saves 221 MB (grayscale) or 663 MB (RGB) of heap that was
+        previously retained indefinitely in ``self._raw_data``.
+
         Args:
             raw_data: np.ndarray of shape (H, W) or (H, W, 3).
             reset_view: Whether to auto-fit view to bounds.
         """
-        self._raw_data = raw_data
         self._raster_h, self._raster_w = raw_data.shape[:2]
 
         stretched = apply_stretch(raw_data, mode=self._stretch_mode)
+
+        # Release the float32 reference immediately — the caller's local
+        # variable will also go out of scope after load_rgb_composition /
+        # load_grayscale_band returns, freeing up to 663 MB on large scenes.
+        self._raw_data = None
 
         self.image_item.setImage(stretched, axisOrder="row-major")
 
@@ -226,6 +238,24 @@ class MainViewWidget(QWidget):
         self.image_item.clear()
         self.overview_img.clear()
         self.extent_roi.setVisible(False)
+
+    def restore_display_cache(self, cached_image: np.ndarray) -> None:
+        """Restore a previously cached uint8 display image to the canvas without re-reading or re-stretching.
+
+        Used by the layer-switching fast path in ``OpenENVIMainWindow._on_active_layer_changed``
+        to switch between already-loaded layers instantly.
+
+        Args:
+            cached_image: uint8 ndarray as stored in ``RasterLayer._display_cache``.
+        """
+        self.image_item.setImage(cached_image, axisOrder="row-major")
+        step = max(1, max(self._raster_h, self._raster_w) // 400) if (self._raster_h and self._raster_w) else 1
+        overview_data = cached_image[::step, ::step] if step > 1 else cached_image
+        self.overview_img.setImage(
+            overview_data,
+            axisOrder="row-major",
+            rect=QRectF(0, 0, self._raster_w, self._raster_h),
+        )
 
     def _custom_mouse_drag_event(self, ev) -> None:
         """Handle mouse dragging on ViewBox.
@@ -367,29 +397,34 @@ class MainViewWidget(QWidget):
                 self.add_roi_overlay(box_pts, color=roi.color)
 
     def save_view_image(self, output_path: str) -> bool:
-        """Export the currently active stretched raster display to PNG/JPEG/BMP."""
-        if self._raw_data is None:
+        """Export the currently active stretched raster display to PNG/JPEG/BMP.
+
+        Reads the already-rendered uint8 image directly from the pyqtgraph
+        ImageItem rather than re-applying stretch from ``_raw_data``, which is
+        now released immediately after display to conserve memory.
+        """
+        if self._raster_w == 0 or self._raster_h == 0:
             return False
-        stretched = apply_stretch(self._raw_data, mode=self._stretch_mode)
+        img_data = self.image_item.image  # uint8 ndarray, shape (W, H) or (W, H, C)
+        if img_data is None:
+            return False
+        # pyqtgraph stores images as (cols, rows[, channels]) — transpose to PIL's (rows, cols)
         from PIL import Image
-        pil_img = Image.fromarray(stretched)
+        arr = np.transpose(img_data, (1, 0, 2)) if img_data.ndim == 3 else img_data.T
+        pil_img = Image.fromarray(arr)
         pil_img.save(output_path)
         return True
 
-    def set_stretch_mode(self, mode: str) -> None:
-        """Update contrast stretch mode and refresh display."""
-        self._stretch_mode = mode
-        if self._raw_data is not None:
-            stretched = apply_stretch(self._raw_data, mode=self._stretch_mode)
-            self.image_item.setImage(stretched, axisOrder="row-major")
 
-            step = max(1, max(self._raster_h, self._raster_w) // 400)
-            overview_data = stretched[::step, ::step] if step > 1 else stretched
-            self.overview_img.setImage(
-                overview_data,
-                axisOrder="row-major",
-                rect=QRectF(0, 0, self._raster_w, self._raster_h),
-            )
+    def set_stretch_mode(self, mode: str) -> None:
+        """Store the current contrast stretch mode.
+
+        Actual re-display after a stretch change is handled by
+        ``OpenENVIMainWindow._on_stretch_changed`` which re-reads the current
+        bands from the reader.  This method only persists the mode so that
+        subsequent ``display_raster`` calls use the correct algorithm.
+        """
+        self._stretch_mode = mode
 
     def zoom_in(self) -> None:
         """Zoom in by 25%."""
