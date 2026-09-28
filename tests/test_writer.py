@@ -100,11 +100,13 @@ def test_export_raster_envi_with_wavelengths_and_nans(tmp_path):
     with open(hdr_path, "r", encoding="utf-8") as f:
         hdr_txt = f.read()
 
-    # Check wavelength enrichment
+    # Check wavelength and band names enrichment
     assert "wavelength" in hdr_txt
     assert "560.5" in hdr_txt
     assert "wavelength units = Nanometers" in hdr_txt
     assert "default bands" in hdr_txt
+    assert "band names =" in hdr_txt
+    assert "Green" in hdr_txt
 
     # Re-open and verify NaN was safely converted to nodata (0) without crash
     reopened = open_raster(res)

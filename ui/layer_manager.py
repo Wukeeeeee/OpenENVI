@@ -97,17 +97,31 @@ class LayerManagerDock(QDockWidget):
             item = self.tree.topLevelItem(i)
             mode = item.data(1, Qt.UserRole)
             if mode:
-                item.setText(1, tr("layer_manager.type_rgb") if mode == "rgb" else tr("layer_manager.type_gray"))
+                if mode == "thematic":
+                    item.setText(1, tr("layer_manager.type_thematic"))
+                elif mode == "rgb":
+                    item.setText(1, tr("layer_manager.type_rgb"))
+                else:
+                    item.setText(1, tr("layer_manager.type_gray"))
 
     def add_layer(self, layer: RasterLayer) -> None:
         """Add a new raster layer to the manager."""
         from core.i18n import tr
-        display_type = tr("layer_manager.type_rgb") if layer.display_mode == "rgb" else tr("layer_manager.type_gray")
+        if getattr(layer, "is_thematic", False):
+            display_type = tr("layer_manager.type_thematic")
+            mode_data = "thematic"
+        elif layer.display_mode == "rgb":
+            display_type = tr("layer_manager.type_rgb")
+            mode_data = "rgb"
+        else:
+            display_type = tr("layer_manager.type_gray")
+            mode_data = "grayscale"
+
         item = QTreeWidgetItem(self.tree, [layer.name, display_type])
         item.setCheckState(0, Qt.Checked if layer.is_visible else Qt.Unchecked)
         item.setData(0, Qt.UserRole, layer.layer_id)
         item.setData(0, Qt.UserRole + 1, "layer")
-        item.setData(1, Qt.UserRole, layer.display_mode)
+        item.setData(1, Qt.UserRole, mode_data)
         self.tree.setCurrentItem(item)
 
         # Sync any existing ROIs on layer

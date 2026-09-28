@@ -92,10 +92,11 @@ def calculate_raster_statistics(
     """
     total_bands = reader.metadata.bands
     results = []
+    effective_nodata = nodata if nodata is not None else getattr(reader.metadata, "nodata", None)
 
     for b in range(total_bands):
         band_data = reader.read_band(b)
-        stats = calculate_band_statistics(band_data, nodata=nodata, bins=bins)
+        stats = calculate_band_statistics(band_data, nodata=effective_nodata, bins=bins)
         stats["band_index"] = b
         stats["band_name"] = (
             reader.metadata.band_details[b].name

@@ -33,14 +33,14 @@ from core.models import RasterLayer
 class IndicesDialog(QDialog):
     """Dialog for computing standard spectral remote sensing indices."""
 
-    result_generated = Signal(str, np.ndarray)  # layer_name, 2D array
+    result_generated = Signal(str, np.ndarray, object)  # layer_name, 2D array, parent_meta
 
     def __init__(self, layer: RasterLayer, reader, parent=None):
         super().__init__(parent)
         self.layer = layer
         self.reader = reader
-        self.setWindowTitle(tr("dialog.indices.title"))
-        self.resize(480, 320)
+        self.setWindowTitle(f"{tr('dialog.indices.title')} - {layer.name}")
+        self.resize(500, 360)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -78,14 +78,14 @@ class IndicesDialog(QDialog):
         for cb in [self.cb_nir, self.cb_red, self.cb_green, self.cb_blue, self.cb_swir]:
             cb.addItems(band_labels)
 
-        # Auto-match bands based on wavelengths (nm)
+        # Auto-match bands based on wavelengths (nm / um) or names
         self._auto_select_bands()
         self._on_index_type_changed(0)
 
         # Action Buttons
         btn_box = QHBoxLayout()
         self.btn_compute = QPushButton(tr("dialog.indices.btn_compute"))
-        self.btn_compute.setStyleSheet("background-color: #238636; color: white; font-weight: bold;")
+        self.btn_compute.setStyleSheet("background-color: #238636; color: white; font-weight: bold; padding: 6px;")
         self.btn_compute.clicked.connect(self._compute)
         btn_box.addWidget(self.btn_compute)
 
@@ -96,27 +96,40 @@ class IndicesDialog(QDialog):
         layout.addLayout(btn_box)
 
     def _auto_select_bands(self) -> None:
-        """Find closest bands matching standard NIR, Red, Green, Blue, SWIR wavelengths."""
+        """Find closest bands matching standard NIR, Red, Green, Blue, SWIR wavelengths or names."""
         bands = self.layer.metadata.band_details
         targets = {
-            self.cb_blue: 480.0,
-            self.cb_green: 550.0,
-            self.cb_red: 660.0,
-            self.cb_nir: 840.0,
-            self.cb_swir: 2200.0,
+            self.cb_blue: (480.0, ["blue", "coastal", "b2", "band 2"]),
+            self.cb_green: (550.0, ["green", "b3", "band 3"]),
+            self.cb_red: (660.0, ["red", "b4", "band 4"]),
+            self.cb_nir: (840.0, ["nir", "near infrared", "b5", "band 5", "b8", "band 8"]),
+            self.cb_swir: (2200.0, ["swir", "swir2", "b7", "band 7"]),
         }
 
-        for cb, target_wl in targets.items():
-            best_idx = 0
+        for cb, (target_wl, keywords) in targets.items():
+            best_idx = None
             best_diff = float("inf")
             for b in bands:
                 if b.wavelength is not None:
-                    diff = abs(b.wavelength - target_wl)
+                    # Normalize wavelength to nanometers
+                    wl_nm = b.wavelength
+                    u = (b.wavelength_unit or "").lower()
+                    if u in ("um", "µm", "micrometers", "micrometer") or wl_nm < 20.0:
+                        wl_nm = wl_nm * 1000.0
+                    diff = abs(wl_nm - target_wl)
                     if diff < best_diff:
                         best_diff = diff
                         best_idx = b.index
-            if best_diff < 300:  # reasonable proximity
+
+            if best_idx is not None and best_diff < 350.0:
                 cb.setCurrentIndex(best_idx)
+            else:
+                # Fallback to name search
+                for b in bands:
+                    name_lower = (b.name or "").lower()
+                    if any(kw in name_lower for kw in keywords):
+                        cb.setCurrentIndex(b.index)
+                        break
 
     def _on_index_type_changed(self, idx: int) -> None:
         """Update visible band selectors according to required inputs."""
@@ -168,7 +181,7 @@ class IndicesDialog(QDialog):
                 res = calculate_nbr(nir, swir)
                 name = "NBR"
 
-            self.result_generated.emit(f"Index: {name}", res)
+            self.result_generated.emit(f"Index: {name}", res, self.layer.metadata)
             self.accept()
         except Exception as e:
             QMessageBox.critical(

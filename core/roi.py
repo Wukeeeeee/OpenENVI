@@ -186,6 +186,7 @@ class ROI:
         for b in range(meta.bands):
             band_data = reader.read_band(b)
             valid = band_data[mask]
-            mean_spectrum[b] = float(np.mean(valid[np.isfinite(valid)]))
+            valid_finite = valid[np.isfinite(valid)]
+            mean_spectrum[b] = float(np.mean(valid_finite)) if len(valid_finite) > 0 else 0.0
 
         return mean_spectrum

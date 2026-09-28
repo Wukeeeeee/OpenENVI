@@ -81,9 +81,13 @@ class RasterLayer:
     # avoid printing potentially large arrays.
     _display_cache: Optional["np.ndarray"] = field(default=None, repr=False)
     _cache_stretch_mode: Optional[str] = field(default=None, repr=False)
+    is_thematic: bool = False
+    _thematic_image: Optional["np.ndarray"] = field(default=None, repr=False)
 
     def get_display_cache(self, stretch_mode: str) -> "Optional[np.ndarray]":
         """Return cached display image if it matches the requested stretch mode."""
+        if self.is_thematic and self._thematic_image is not None:
+            return self._thematic_image
         if self._display_cache is not None and self._cache_stretch_mode == stretch_mode:
             return self._display_cache
         return None
@@ -93,8 +97,15 @@ class RasterLayer:
         self._display_cache = image
         self._cache_stretch_mode = stretch_mode
 
+    def set_thematic_image(self, image: "np.ndarray") -> None:
+        """Configure layer as a thematic classification layer with fixed RGB visualization."""
+        self.is_thematic = True
+        self._thematic_image = image
+        self._display_cache = image
+
     def invalidate_display_cache(self) -> None:
         """Discard the cached display image (e.g. after band or stretch change)."""
-        self._display_cache = None
-        self._cache_stretch_mode = None
+        if not self.is_thematic:
+            self._display_cache = None
+            self._cache_stretch_mode = None
 

@@ -36,6 +36,7 @@ IMPLEMENTED_TOOLS = {
     # Classification
     "kmeans",
     "isodata",
+    "maxlik",
     "sam",
     "accuracy",
     # Spectral

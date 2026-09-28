@@ -11,6 +11,7 @@ from core.algorithms.classification import (
     create_thematic_rgb,
     isodata_clustering,
     kmeans_clustering,
+    maximum_likelihood_classification,
 )
 from core.algorithms.indices import (
     calculate_evi,
@@ -110,6 +111,25 @@ def test_band_math_ast():
     # sqrt(100) + 1 = 11.0
     np.testing.assert_allclose(res2, 11.0, rtol=1e-5)
 
+    # Reduction & element-wise min/max
+    res_min1 = evaluate_band_math("min(b1)", vars_dict)
+    assert float(res_min1[0, 0]) == 10.0
+    res_max2 = evaluate_band_math("max(b1, b2)", vars_dict)
+    np.testing.assert_allclose(res_max2, 10.0)
+
+    # Normalization formula: (b1 - min(b1)) / (max(b1) - min(b1))
+    ramp = np.arange(25, dtype=np.float32).reshape((5, 5))
+    res_norm = evaluate_band_math("(ramp - min(ramp)) / (max(ramp) - min(ramp))", {"ramp": ramp})
+    assert res_norm.min() == pytest.approx(0.0)
+    assert res_norm.max() == pytest.approx(1.0)
+
+    # Mean and Where
+    res_mean = evaluate_band_math("mean(ramp)", {"ramp": ramp})
+    assert float(res_mean[0, 0]) == pytest.approx(12.0)
+
+    res_where = evaluate_band_math("where(ramp > 12.0, 1.0, 0.0)", {"ramp": ramp})
+    assert (res_where > 0).sum() == 12
+
 
 def test_pca_and_mnf():
     """Verify PCA and MNF dimensional reduction on synthetic cube."""
@@ -183,3 +203,39 @@ def test_roi_statistics():
     assert stats["min"] == pytest.approx(5.0)
     assert stats["max"] == pytest.approx(5.0)
     assert stats["std"] == pytest.approx(0.0)
+
+
+def test_maximum_likelihood_classification():
+    """Verify supervised Maximum Likelihood Classification on distinct classes."""
+    bands, lines, samples = 4, 20, 20
+    cube = np.zeros((bands, lines, samples), dtype=np.float32)
+
+    # Class 0: Left half is centered around [10, 20, 30, 40]
+    cube[:, :, :10] = np.array([10, 20, 30, 40], dtype=np.float32)[:, None, None]
+    cube[:, :, :10] += np.random.normal(0, 0.5, (bands, lines, 10)).astype(np.float32)
+
+    # Class 1: Right half is centered around [80, 70, 60, 50]
+    cube[:, :, 10:] = np.array([80, 70, 60, 50], dtype=np.float32)[:, None, None]
+    cube[:, :, 10:] += np.random.normal(0, 0.5, (bands, lines, 10)).astype(np.float32)
+
+    # Training samples from each half
+    train_c0 = cube[:, :5, :5].reshape(bands, -1).T
+    train_c1 = cube[:, :5, 15:].reshape(bands, -1).T
+
+    training_data = {0: train_c0, 1: train_c1}
+
+    class_map, dists = maximum_likelihood_classification(cube, training_data, probability_threshold=0.0)
+
+    assert class_map.shape == (20, 20)
+    assert dists.shape == (2, 20, 20)
+
+    # Left half should be class 0, right half class 1 with > 98% accuracy
+    assert (class_map[:, :10] == 0).sum() >= 195
+    assert (class_map[:, 10:] == 1).sum() >= 195
+
+    # Test probability threshold: an extreme outlier pixel should be classified as -1
+    cube[:, 0, 0] = 9999.0
+    class_map_thresh, _ = maximum_likelihood_classification(
+        cube, training_data, probability_threshold=0.01
+    )
+    assert class_map_thresh[0, 0] == -1

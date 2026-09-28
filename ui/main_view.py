@@ -203,7 +203,10 @@ class MainViewWidget(QWidget):
         """
         self._raster_h, self._raster_w = raw_data.shape[:2]
 
-        stretched = apply_stretch(raw_data, mode=self._stretch_mode)
+        if raw_data.dtype == np.uint8:
+            stretched = raw_data
+        else:
+            stretched = apply_stretch(raw_data, mode=self._stretch_mode)
 
         # Release the float32 reference immediately — the caller's local
         # variable will also go out of scope after load_rgb_composition /

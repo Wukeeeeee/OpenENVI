@@ -71,6 +71,7 @@ def linear_percent_stretch(
     np.subtract(image, lower_val, out=out, casting="unsafe")
     out /= upper_val - lower_val
     np.clip(out, 0.0, 1.0, out=out)
+    out[~valid_mask] = 0.0
     return out
 
 
@@ -119,6 +120,7 @@ def histogram_equalization_stretch(
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     result = np.interp(image.astype(np.float32), bin_centers, cdf).astype(np.float32)
     np.clip(result, 0.0, 1.0, out=out)
+    out[~valid_mask] = 0.0
     return out
 
 
@@ -168,6 +170,7 @@ def gaussian_stretch(
     np.subtract(image, lower_val, out=out, casting="unsafe")
     out /= upper_val - lower_val
     np.clip(out, 0.0, 1.0, out=out)
+    out[~valid_mask] = 0.0
     return out
 
 
@@ -208,6 +211,7 @@ def min_max_stretch(
     np.subtract(image, min_val, out=out, casting="unsafe")
     out /= max_val - min_val
     np.clip(out, 0.0, 1.0, out=out)
+    out[~valid_mask] = 0.0
     return out
 
 

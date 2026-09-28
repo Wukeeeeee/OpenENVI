@@ -234,7 +234,7 @@ def test_classification_worker_and_progress(qapp):
 
     worker = ClassificationWorker(reader, total_bands=3, method_idx=0, num_classes=3, max_iters=5)
     worker.progress.connect(lambda pct, msg: progress_updates.append((pct, msg)))
-    worker.finished.connect(lambda name, rgb: results.append((name, rgb)))
+    worker.finished.connect(lambda name, cmap, m, rgb: results.append((name, cmap, m, rgb)))
     worker.failed.connect(lambda err: errors.append(err))
 
     worker.run()  # run synchronously in test
@@ -244,8 +244,9 @@ def test_classification_worker_and_progress(qapp):
     # Final progress should reach 100%
     assert progress_updates[-1][0] == 100
     assert len(results) == 1
-    layer_name, thematic_rgb = results[0]
+    layer_name, class_map, meta_out, thematic_rgb = results[0]
     assert "K-Means" in layer_name
+    assert class_map.shape == (100, 100)
     assert thematic_rgb.shape == (100, 100, 3)
 
 
@@ -389,4 +390,418 @@ def test_layer_stacking_dialog_ui_and_worker(qapp):
     assert m.band_details[1].wavelength == 550.0
 
     dlg.close()
+
+
+def test_band_math_advanced_syntax_and_dialog_ui(qapp):
+    """Verify Band Math evaluation with float(), scalar division, comparison ops, and dialog."""
+    from core.algorithms.indices import evaluate_band_math
+    from ui.dialogs.band_math_dialog import BandMathDialog
+    from core.models import BandInfo, RasterLayer, RasterMetadata
+
+    b1 = np.full((10, 10), 10.0, dtype=np.float32)
+    b2 = np.full((10, 10), 2.0, dtype=np.float32)
+    vars_dict = {"b1": b1, "b2": b2}
+
+    # 1. Scalar numerator division (previously crashed with ValueError non-broadcastable)
+    res_div = evaluate_band_math("1.0 / b1", vars_dict)
+    assert res_div.shape == (10, 10)
+    np.testing.assert_allclose(res_div, 0.1, rtol=1e-5)
+
+    # 2. ENVI IDL float() casting
+    res_float = evaluate_band_math("(float(b1) - float(b2)) / (b1 + b2)", vars_dict)
+    # (10 - 2) / (10 + 2) = 8 / 12 = 0.66667
+    np.testing.assert_allclose(res_float, 8.0 / 12.0, rtol=1e-5)
+
+    # 3. Comparison thresholding
+    res_cmp = evaluate_band_math("(b1 > 5.0) * b2", vars_dict)
+    np.testing.assert_allclose(res_cmp, 2.0, rtol=1e-5)
+
+    # 4. Dialog UI
+    meta = RasterMetadata(width=10, height=10, bands=2, dtype="float32", band_details=[
+        BandInfo(index=0, name="Band 1"),
+        BandInfo(index=1, name="Band 2"),
+    ])
+    reader = MemoryRasterReader(np.stack([b1, b2]), parent_metadata=meta)
+    layer = RasterLayer(layer_id="l_math", name="MathLayer", file_path="mem://math", metadata=meta)
+
+    dlg = BandMathDialog(layer, reader)
+    assert dlg.combo_presets.count() > 3
+    # Check variable mapping populated
+    assert "b4" in dlg._var_combos or "b3" in dlg._var_combos
+    # Insert custom expr
+    dlg.edit_expr.setText("(b1 + b2) * 2.0")
+    assert "b1" in dlg._var_combos
+    assert "b2" in dlg._var_combos
+
+    results = []
+    dlg.result_generated.connect(lambda name, arr, m: results.append((name, arr, m)))
+    dlg._execute()
+
+    assert len(results) == 1
+    name, arr, m = results[0]
+    np.testing.assert_allclose(arr, 24.0, rtol=1e-5)
+    assert m == meta
+    dlg.close()
+
+
+def test_indices_dialog_wavelength_micrometers_and_names(qapp):
+    """Verify IndicesDialog automatic band selection with wavelengths in micrometers and names."""
+    from ui.dialogs.indices_dialog import IndicesDialog
+    from core.models import BandInfo, RasterLayer, RasterMetadata
+
+    data = np.ones((5, 15, 15), dtype=np.float32)
+    # Landsat-like bands with micrometers (0.48 um Blue, 0.56 um Green, 0.65 um Red, 0.86 um NIR, 2.2 um SWIR)
+    binfo = [
+        BandInfo(index=0, name="Coastal", wavelength=0.44, wavelength_unit="um"),
+        BandInfo(index=1, name="Blue", wavelength=0.48, wavelength_unit="um"),
+        BandInfo(index=2, name="Green", wavelength=0.56, wavelength_unit="um"),
+        BandInfo(index=3, name="Red", wavelength=0.65, wavelength_unit="um"),
+        BandInfo(index=4, name="NIR", wavelength=0.86, wavelength_unit="um"),
+    ]
+    meta = RasterMetadata(width=15, height=15, bands=5, dtype="float32", band_details=binfo)
+    reader = MemoryRasterReader(data, parent_metadata=meta)
+    layer = RasterLayer(layer_id="l_idx", name="LandsatScene", file_path="mem://idx", metadata=meta)
+
+    dlg = IndicesDialog(layer, reader)
+    # NDVI requires NIR (band index 4) and Red (band index 3)
+    assert dlg.cb_nir.currentIndex() == 4
+    assert dlg.cb_red.currentIndex() == 3
+
+    # Switch to NDWI (Green: band 2, NIR: band 4)
+    dlg.cb_index.setCurrentIndex(1)
+    assert dlg.cb_green.currentIndex() == 2
+    assert dlg.cb_nir.currentIndex() == 4
+
+    # Compute NDVI
+    results = []
+    dlg.cb_index.setCurrentIndex(0)
+    dlg.result_generated.connect(lambda name, arr, m: results.append((name, arr, m)))
+    dlg._compute()
+
+    assert len(results) == 1
+    name, arr, m = results[0]
+    assert "NDVI" in name
+    assert arr.shape == (15, 15)
+    assert m == meta
+    dlg.close()
+
+
+def test_pca_and_mnf_dialog_modes(qapp):
+    """Verify PCADialog in both PCA and MNF modes with report generation and component outputs."""
+    from ui.dialogs.pca_dialog import PCADialog
+    from core.models import BandInfo, RasterLayer, RasterMetadata
+
+    cube = np.random.RandomState(42).randn(6, 20, 20).astype(np.float32)
+    meta = RasterMetadata(width=20, height=20, bands=6, dtype="float32")
+    reader = MemoryRasterReader(cube, parent_metadata=meta)
+    layer = RasterLayer(layer_id="l_tf", name="Hyperspectral", file_path="mem://hs", metadata=meta)
+
+    # 1. PCA Mode
+    dlg_pca = PCADialog(layer, reader, mode="pca")
+    assert "PCA" in dlg_pca.windowTitle()
+    res_pca = []
+    dlg_pca.result_generated.connect(lambda n, a, m: res_pca.append((n, a, m)))
+    dlg_pca._run_transform()
+    assert len(res_pca) >= 1
+    assert "PCA" in dlg_pca.txt_report.toPlainText()
+    assert "Cumulative Variance" in dlg_pca.txt_report.toPlainText()
+    dlg_pca.close()
+
+    # 2. MNF Mode
+    dlg_mnf = PCADialog(layer, reader, mode="mnf")
+    assert "MNF" in dlg_mnf.windowTitle()
+    res_mnf = []
+    dlg_mnf.result_generated.connect(lambda n, a, m: res_mnf.append((n, a, m)))
+    dlg_mnf._run_transform()
+    assert len(res_mnf) >= 1
+    assert "Minimum Noise Fraction" in dlg_mnf.txt_report.toPlainText()
+    assert "Estimated SNR" in dlg_mnf.txt_report.toPlainText()
+    dlg_mnf.close()
+
+
+def test_sam_dialog_ui_and_worker(qapp):
+    """Verify SAMDialog endmember selection from ROIs, thresholding, rule images, and worker."""
+    from ui.dialogs.sam_dialog import SAMDialog, SAMWorker
+    from core.models import BandInfo, RasterLayer, RasterMetadata
+    from core.roi import ROI
+
+    # 8-band cube with distinct vegetation and water spectral signatures
+    cube = np.zeros((8, 20, 20), dtype=np.float32)
+    # Band 3: Red (low veg, med water)
+    # Band 4: NIR (high veg, low water)
+    cube[3, :10, :10] = 0.05  # Veg Red
+    cube[4, :10, :10] = 0.60  # Veg NIR
+    cube[3, 10:, 10:] = 0.15  # Water Red
+    cube[4, 10:, 10:] = 0.02  # Water NIR
+
+    meta = RasterMetadata(width=20, height=20, bands=8, dtype="float32", band_details=[
+        BandInfo(index=i, name=f"Band {i+1}", wavelength=400.0 + i * 100.0) for i in range(8)
+    ])
+    reader = MemoryRasterReader(cube, parent_metadata=meta)
+
+    # Create 2 ROIs: Veg (top-left) and Water (bottom-right)
+    roi_veg = ROI(roi_id="r_veg", name="Vegetation", color="#00ff00", bbox=(0, 0, 5, 5))
+    roi_water = ROI(roi_id="r_water", name="Water", color="#0000ff", bbox=(12, 12, 18, 18))
+
+    layer = RasterLayer(layer_id="l_sam", name="Scene", file_path="mem://sam", metadata=meta, rois=[roi_veg, roi_water])
+
+    # Test Worker directly
+    worker = SAMWorker(
+        reader=reader,
+        parent_meta=meta,
+        selected_rois=[roi_veg, roi_water],
+        max_angle=0.20,
+        generate_rules=True,
+        base_name="Scene",
+    )
+    res = []
+    worker.finished.connect(
+        lambda name, cmap, m, thematic, rules, r_meta: res.append((name, cmap, m, thematic, rules, r_meta))
+    )
+    worker.run()
+
+    assert len(res) == 1
+    class_name, class_map, m, thematic_rgb, rules, r_meta = res[0]
+    assert "SAM Classify" in class_name
+    assert class_map.shape == (20, 20)
+    assert thematic_rgb.shape == (20, 20, 3)
+    # Top-left pixel should match vegetation (green: #00ff00 -> [0, 255, 0])
+    np.testing.assert_array_equal(thematic_rgb[2, 2], [0, 255, 0])
+    # Bottom-right pixel should match water (blue: #0000ff -> [0, 0, 255])
+    np.testing.assert_array_equal(thematic_rgb[15, 15], [0, 0, 255])
+    # Unclassified regions or background should be black (0, 0, 0)
+    np.testing.assert_array_equal(thematic_rgb[0, 19], [0, 0, 0])
+
+    # Rule images check
+    assert rules is not None
+    assert rules.shape == (2, 20, 20)
+    assert r_meta.bands == 2
+
+    # Test Dialog UI
+    dlg = SAMDialog(layer, reader)
+    assert dlg.table_rois.rowCount() == 2
+    assert dlg.btn_run.isEnabled()
+    assert dlg.chk_rule_images.isChecked()
+    dlg.close()
+
+
+def test_pansharpen_worker_metadata_preservation(qapp):
+    """Verify PanSharpenWorker preserves MS band details and PAN spatial transform."""
+    from ui.dialogs.pansharpen_dialog import PanSharpenWorker
+    from core.models import BandInfo, RasterMetadata
+    from core.io.memory import MemoryRasterReader
+
+    # 4-band MS image (10x10)
+    ms_bands = [
+        BandInfo(index=0, name="Blue", wavelength=480.0, wavelength_unit="nm", fwhm=30.0),
+        BandInfo(index=1, name="Green", wavelength=560.0, wavelength_unit="nm", fwhm=40.0),
+        BandInfo(index=2, name="Red", wavelength=660.0, wavelength_unit="nm", fwhm=40.0),
+        BandInfo(index=3, name="NIR", wavelength=860.0, wavelength_unit="nm", fwhm=50.0),
+    ]
+    ms_data = np.ones((4, 10, 10), dtype=np.float32)
+    ms_meta = RasterMetadata(
+        width=10, height=10, bands=4, band_details=ms_bands, crs="EPSG:32650", transform=(30.0, 0, 1000, 0, -30.0, 2000)
+    )
+    ms_reader = MemoryRasterReader(ms_data, parent_metadata=ms_meta)
+
+    # 1-band PAN image (20x20)
+    pan_data = np.ones((1, 20, 20), dtype=np.float32) * 1.5
+    pan_meta = RasterMetadata(
+        width=20, height=20, bands=1, crs="EPSG:32650", transform=(15.0, 0, 1000, 0, -15.0, 2000)
+    )
+    pan_reader = MemoryRasterReader(pan_data, parent_metadata=pan_meta)
+
+    worker = PanSharpenWorker(
+        ms_reader=ms_reader,
+        selected_bands=[1, 2, 3],  # Green, Red, NIR
+        pan_reader=pan_reader,
+        pan_file_path=None,
+        method="gs",
+        name="PanSharpen_Test",
+    )
+
+    results = []
+    worker.finished.connect(lambda name, fused, meta: results.append((name, fused, meta)))
+    worker.run()
+
+    assert len(results) == 1
+    out_name, out_fused, out_meta = results[0]
+    assert out_name == "PanSharpen_Test"
+    assert out_fused.shape == (20, 20, 3)
+    assert out_meta.width == 20
+    assert out_meta.height == 20
+    assert out_meta.bands == 3
+    assert out_meta.transform == (15.0, 0, 1000, 0, -15.0, 2000)
+    assert len(out_meta.band_details) == 3
+    assert out_meta.band_details[0].name == "Green"
+    assert out_meta.band_details[0].wavelength == 560.0
+    assert out_meta.band_details[1].name == "Red"
+    assert out_meta.band_details[1].wavelength == 660.0
+    assert out_meta.band_details[2].name == "NIR"
+    assert out_meta.band_details[2].wavelength == 860.0
+
+
+def test_radiometry_worker_subset_metadata_preservation(qapp):
+    """Verify RadiometryWorker creates cal_meta containing only the selected calibrated bands."""
+    from ui.dialogs.radiometry_dialog import RadiometryWorker
+    from core.models import BandInfo, RasterMetadata
+    from core.io.memory import MemoryRasterReader
+
+    b_info = [
+        BandInfo(index=0, name="Coastal", wavelength=443.0),
+        BandInfo(index=1, name="Blue", wavelength=482.0),
+        BandInfo(index=2, name="Green", wavelength=562.0),
+        BandInfo(index=3, name="Red", wavelength=655.0),
+    ]
+    data = np.full((4, 15, 15), 1000.0, dtype=np.float32)
+    meta = RasterMetadata(width=15, height=15, bands=4, band_details=b_info, crs="EPSG:4326")
+    reader = MemoryRasterReader(data, parent_metadata=meta)
+
+    # Calibrate only Red (index 3) and Green (index 2)
+    worker = RadiometryWorker(
+        reader=reader,
+        cal_type="TOA Reflectance",
+        band_indices=[2, 3],
+        custom_mult=0.0001,
+        custom_add=0.0,
+        custom_sun_elev=45.0,
+        name="TOA_Refl_Sub",
+    )
+
+    results = []
+    worker.finished.connect(lambda name, res, cal_meta: results.append((name, res, cal_meta)))
+    worker.run()
+
+    assert len(results) == 1
+    name, res_arr, cal_meta = results[0]
+    assert cal_meta.bands == 2
+    assert len(cal_meta.band_details) == 2
+    assert cal_meta.band_details[0].wavelength == 562.0
+    assert "Green" in cal_meta.band_details[0].name
+    assert cal_meta.band_details[1].wavelength == 655.0
+    assert "Red" in cal_meta.band_details[1].name
+
+
+def test_thematic_layer_display_cache_and_persistence():
+    """Verify that thematic classification layer preserves display image across stretch mode changes."""
+    from core.models import RasterLayer, RasterMetadata
+
+    meta = RasterMetadata(width=10, height=10, bands=1)
+    layer = RasterLayer(layer_id="l1", name="Thematic", file_path="mem://test", metadata=meta)
+
+    dummy_rgb = np.full((10, 10, 3), 128, dtype=np.uint8)
+    layer.set_thematic_image(dummy_rgb)
+
+    assert layer.is_thematic is True
+    # Cached display must be returned regardless of stretch mode
+    assert layer.get_display_cache("linear2") is dummy_rgb
+    assert layer.get_display_cache("equalize") is dummy_rgb
+    assert layer.get_display_cache("gaussian") is dummy_rgb
+
+    # When invalidate_display_cache is called across all layers on stretch change, thematic image must not be erased
+    layer.invalidate_display_cache()
+    assert layer.get_display_cache("min_max") is dummy_rgb
+
+
+def test_raster_statistics_automatic_nodata():
+    """Verify that calculate_raster_statistics respects reader.metadata.nodata automatically."""
+    from core.algorithms.statistics import calculate_raster_statistics
+    from core.models import RasterMetadata
+    from core.io.memory import MemoryRasterReader
+
+    # Array where half the pixels are nodata (-9999) and half are 10.0
+    arr = np.array([
+        [-9999.0, -9999.0, 10.0, 10.0],
+        [-9999.0, -9999.0, 10.0, 10.0],
+    ], dtype=np.float32)
+    meta = RasterMetadata(width=4, height=2, bands=1, nodata=-9999.0)
+    reader = MemoryRasterReader(arr, parent_metadata=meta)
+
+    stats = calculate_raster_statistics(reader)
+    assert len(stats) == 1
+    b_stat = stats[0]
+    assert b_stat["count"] == 4
+    assert b_stat["min"] == 10.0
+    assert b_stat["max"] == 10.0
+    assert b_stat["mean"] == 10.0
+
+
+def test_maxlik_dialog_workflow(qapp):
+    """Verify MaximumLikelihoodDialog populates ROIs and executes background classification."""
+    from ui.dialogs.maxlik_dialog import MaximumLikelihoodDialog
+    from core.roi import ROI
+
+    # Create 4-band test image (20x20)
+    data = np.zeros((4, 20, 20), dtype=np.float32)
+    data[:, :, :10] = 50.0
+    data[:, :, 10:] = 200.0
+
+    meta = RasterMetadata(width=20, height=20, bands=4)
+    reader = MemoryRasterReader(data, parent_metadata=meta)
+    layer = RasterLayer(layer_id="test_mlc", name="Test MLC Layer", file_path="memory://test_mlc", metadata=meta)
+
+    # Add 2 ROIs: Class 0 (left) and Class 1 (right)
+    roi1 = ROI(roi_id="roi_0", name="Water", color="#0000ff", bbox=(0, 0, 5, 5))
+    roi2 = ROI(roi_id="roi_1", name="Land", color="#00ff00", bbox=(12, 12, 18, 18))
+    layer.rois = [roi1, roi2]
+
+    dlg = MaximumLikelihoodDialog(layer=layer, reader=reader)
+    assert dlg.table_rois.rowCount() == 2
+    assert dlg.btn_run.isEnabled() is True
+
+    # Test ROI selection controls
+    dlg._deselect_all_rois()
+    assert len(dlg._get_selected_rois()) == 0
+    dlg._select_all_rois()
+    assert len(dlg._get_selected_rois()) == 2
+
+    # Run worker directly
+    results = []
+    dlg.result_generated.connect(lambda name, cmap, meta, rgb: results.append((name, cmap, rgb)))
+
+    # Execute classification worker
+    dlg._run_classification()
+    assert dlg._worker is not None
+    dlg._worker.wait(10000)
+
+    # Process events to deliver finished signal
+    from PySide6.QtCore import QCoreApplication
+    QCoreApplication.processEvents()
+
+    assert len(results) >= 1
+    layer_name, cmap, rgb = results[0]
+    assert "MLC Classify" in layer_name
+    assert cmap.shape == (20, 20)
+    assert rgb.shape == (20, 20, 3)
+    assert rgb.dtype == np.uint8
+
+
+def test_data_manager_close_file_signal(qapp):
+    """Verify DataManager close_file_requested signal removes layer and releases resources."""
+    from app.main_window import OpenENVIMainWindow
+    from PySide6.QtWidgets import QTreeWidgetItem
+
+    win = OpenENVIMainWindow()
+    meta = RasterMetadata(width=10, height=10, bands=3)
+    reader = MemoryRasterReader(np.ones((3, 10, 10), dtype=np.float32), parent_metadata=meta)
+    layer = RasterLayer(layer_id="close_test_id", name="Close Test", file_path="memory://close_test", metadata=meta)
+
+    win._readers["close_test_id"] = reader
+    win._layers["close_test_id"] = layer
+    win._active_layer_id = "close_test_id"
+    win.dock_layer_manager.add_layer(layer)
+    win.dock_data_manager.add_dataset(layer)
+
+    assert "close_test_id" in win._layers
+    assert "close_test_id" in win._readers
+
+    # Trigger close file signal
+    win.dock_data_manager.close_file_requested.emit("close_test_id")
+
+    assert "close_test_id" not in win._layers
+    assert "close_test_id" not in win._readers
+    assert win._active_layer_id is None
+
+
+
 

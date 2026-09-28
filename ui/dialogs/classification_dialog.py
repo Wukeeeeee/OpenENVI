@@ -34,7 +34,7 @@ class ClassificationWorker(QThread):
     """Background worker thread executing classification without GUI blocking."""
 
     progress = Signal(int, str)  # percent, status_text
-    finished = Signal(str, np.ndarray)  # layer_name, 3D thematic RGB array
+    finished = Signal(str, np.ndarray, object, object)  # layer_name, 2D class_map, meta, 3D thematic RGB array
     failed = Signal(str)  # error_message
 
     def __init__(
@@ -92,7 +92,7 @@ class ClassificationWorker(QThread):
             layer_name = f"Classify ({method_name}, K={self.num_classes})"
 
             self.progress.emit(100, "Classification complete!")
-            self.finished.emit(layer_name, thematic_rgb)
+            self.finished.emit(layer_name, class_map, self.reader.metadata, thematic_rgb)
 
         except Exception as e:
             self.failed.emit(str(e))
@@ -101,7 +101,7 @@ class ClassificationWorker(QThread):
 class ClassificationDialog(QDialog):
     """Dialog for unsupervised remote sensing classification."""
 
-    result_generated = Signal(str, np.ndarray)  # layer_name, 3D thematic RGB array
+    result_generated = Signal(str, np.ndarray, object, object)  # layer_name, 2D class_map, meta, 3D thematic RGB array
 
     def __init__(self, layer: RasterLayer, reader, parent=None):
         super().__init__(parent)
@@ -205,11 +205,17 @@ class ClassificationDialog(QDialog):
         self.progress_bar.setValue(percent)
         self.lbl_progress.setText(message)
 
-    @Slot(str, np.ndarray)
-    def _on_finished(self, layer_name: str, thematic_rgb: np.ndarray) -> None:
+    @Slot(str, np.ndarray, object, object)
+    def _on_finished(
+        self,
+        layer_name: str,
+        class_map: np.ndarray,
+        meta: object,
+        thematic_rgb: np.ndarray,
+    ) -> None:
         """Handle classification completion."""
         event_bus.status_message.emit(f"Classification completed: {layer_name}", 4000)
-        self.result_generated.emit(layer_name, thematic_rgb)
+        self.result_generated.emit(layer_name, class_map, meta, thematic_rgb)
         self.accept()
 
     @Slot(str)

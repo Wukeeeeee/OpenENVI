@@ -29,10 +29,20 @@ class GeoTIFFRasterReader(BaseRasterReader):
         band_details = []
         for i in range(ds.count):
             desc = ds.descriptions[i] if ds.descriptions and i < len(ds.descriptions) else ""
+            wl = None
+            try:
+                tags = ds.tags(i + 1)
+                wl_str = tags.get("WAVELENGTH") or tags.get("wavelength")
+                if wl_str:
+                    wl = float(wl_str)
+            except Exception:
+                pass
+
             band_details.append(
                 BandInfo(
                     index=i,
                     name=desc or f"Band {i + 1}",
+                    wavelength=wl,
                 )
             )
 
@@ -83,9 +93,12 @@ class GeoTIFFRasterReader(BaseRasterReader):
         if not self._dataset.transform:
             return None, None
 
-        # rasterio.transform.xy takes (row, col)
-        geo_x, geo_y = rasterio.transform.xy(self._dataset.transform, y, x, offset="center")
-        return float(geo_x), float(geo_y)
+        try:
+            # rasterio.transform.xy takes (row, col)
+            geo_x, geo_y = rasterio.transform.xy(self._dataset.transform, y, x, offset="center")
+            return float(geo_x), float(geo_y)
+        except Exception:
+            return None, None
 
     def close(self) -> None:
         """Close open rasterio dataset."""

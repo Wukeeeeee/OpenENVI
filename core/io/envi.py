@@ -325,20 +325,31 @@ class ENVIRasterReader(BaseRasterReader):
 
     def pixel_to_geo(self, x: int, y: int) -> Tuple[Optional[float], Optional[float]]:
         """Compute geographic coordinates from pixel coordinates."""
-        if not self._map_info:
-            return None, None
+        if self._map_info:
+            try:
+                tie_x = self._map_info["tie_x"]
+                tie_y = self._map_info["tie_y"]
+                easting = self._map_info["easting"]
+                northing = self._map_info["northing"]
+                dx = self._map_info["dx"]
+                dy = self._map_info["dy"]
 
-        tie_x = self._map_info["tie_x"]
-        tie_y = self._map_info["tie_y"]
-        easting = self._map_info["easting"]
-        northing = self._map_info["northing"]
-        dx = self._map_info["dx"]
-        dy = self._map_info["dy"]
+                # Note: ENVI 1-based pixel tie-points
+                geo_x = easting + (x - (tie_x - 1.0)) * dx
+                geo_y = northing - (y - (tie_y - 1.0)) * dy
+                return float(geo_x), float(geo_y)
+            except Exception:
+                pass
 
-        # Note: ENVI 1-based pixel tie-points
-        geo_x = easting + (x - (tie_x - 1.0)) * dx
-        geo_y = northing - (y - (tie_y - 1.0)) * dy
-        return float(geo_x), float(geo_y)
+        if hasattr(self, "_metadata") and self._metadata and self._metadata.transform:
+            try:
+                import rasterio.transform
+                geo_x, geo_y = rasterio.transform.xy(self._metadata.transform, y, x, offset="center")
+                return float(geo_x), float(geo_y)
+            except Exception:
+                pass
+
+        return None, None
 
     def close(self) -> None:
         """Close memory-mapped file."""

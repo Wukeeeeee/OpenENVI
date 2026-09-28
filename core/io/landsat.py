@@ -208,8 +208,11 @@ class LandsatMTLReader(BaseRasterReader):
         """Transform pixel coordinate to geospatial coordinate."""
         if not self._ref_dataset or not self._ref_dataset.transform:
             return None, None
-        geo_x, geo_y = rasterio.transform.xy(self._ref_dataset.transform, y, x, offset="center")
-        return float(geo_x), float(geo_y)
+        try:
+            geo_x, geo_y = rasterio.transform.xy(self._ref_dataset.transform, y, x, offset="center")
+            return float(geo_x), float(geo_y)
+        except Exception:
+            return None, None
 
     def close(self) -> None:
         """Close all open rasterio dataset handles."""

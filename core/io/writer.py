@@ -205,6 +205,29 @@ def _enrich_envi_header(
             if len(mapped) == 3:
                 additions.append(f"default bands = {{ {', '.join(mapped)} }}")
 
+        # Band names
+        if "band names =" not in content and meta.band_details:
+            b_names = []
+            for b in band_indices:
+                if b < len(meta.band_details) and meta.band_details[b].name:
+                    b_names.append(meta.band_details[b].name)
+                else:
+                    b_names.append(f"Band {b + 1}")
+            if b_names:
+                names_str = ",\n ".join(b_names)
+                additions.append(f"band names = {{\n {names_str}\n}}")
+
+        # Classification header fields
+        raw = getattr(meta, "raw_header", {}) or {}
+        for key in ("file type", "classes", "class lookup", "class names"):
+            if f"{key} =" not in content and key in raw:
+                val = raw[key]
+                if isinstance(val, (list, tuple)):
+                    val_str = ",\n ".join(str(v) for v in val)
+                    additions.append(f"{key} = {{\n {val_str}\n}}")
+                else:
+                    additions.append(f"{key} = {val}")
+
         # Data ignore value (NoData)
         if "data ignore value" not in content and nodata is not None:
             additions.append(f"data ignore value = {nodata}")

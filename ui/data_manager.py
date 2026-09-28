@@ -33,6 +33,7 @@ class DataManagerDock(QDockWidget):
 
     load_grayscale_requested = Signal(str, int)  # layer_id, band_idx
     load_rgb_requested = Signal(str, int, int, int)  # layer_id, r, g, b
+    close_file_requested = Signal(str)  # layer_id
 
     def __init__(self, parent=None):
         super().__init__("Data Manager", parent)
@@ -325,21 +326,15 @@ class DataManagerDock(QDockWidget):
                     QMessageBox.warning(self, tr("data_manager.rgb_group"), tr("data_manager.msg_assign_rgb"))
 
     def _on_close_file_clicked(self) -> None:
-        """Close selected dataset in tree."""
+        """Close selected dataset in tree and notify MainWindow to release layer."""
         from core.i18n import tr
         current = self.tree.currentItem()
         if not current:
             return
         parent = current.parent()
         target = parent if parent is not None else current
-        index = self.tree.indexOfTopLevelItem(target)
-        if index >= 0:
-            item = self.tree.takeTopLevelItem(index)
-            data = item.data(0, Qt.UserRole)
-            if data and data[1] == self._selected_layer_id:
-                self._selected_layer_id = None
-                self._selected_band_idx = None
-                self._rgb_bands = [None, None, None]
-                self._rgb_band_names = ["", "", ""]
-                self._update_rgb_slot_ui()
+        data = target.data(0, Qt.UserRole)
+        if data and len(data) >= 2:
+            layer_id = data[1]
+            self.close_file_requested.emit(layer_id)
             event_bus.status_message.emit(tr("data_manager.msg_file_closed"), 2000)

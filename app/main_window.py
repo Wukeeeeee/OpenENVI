@@ -33,11 +33,13 @@ from ui.dialogs.color_dialog import ColorTransformDialog
 from ui.dialogs.continuum_dialog import ContinuumRemovalDialog
 from ui.dialogs.export_dialog import ExportRasterDialog
 from ui.dialogs.indices_dialog import IndicesDialog
+from ui.dialogs.maxlik_dialog import MaximumLikelihoodDialog
 from ui.dialogs.pansharpen_dialog import PanSharpenDialog
 from ui.dialogs.pca_dialog import PCADialog
 from ui.dialogs.radiometry_dialog import RadiometryDialog
 from ui.dialogs.resize_dialog import ResizeDataDialog
 from ui.dialogs.roi_dialog import ROIToolDialog
+from ui.dialogs.sam_dialog import SAMDialog
 from ui.dialogs.stacking_dialog import LayerStackingDialog
 from ui.dialogs.stats_dialog import QuickStatsDialog
 from ui.dialogs.synthetic_dialog import SyntheticDataDialog
@@ -182,8 +184,17 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_pca = QAction("Principal Components Analysis (PCA)...", self)
         self.act_pca.triggered.connect(self.show_pca_dialog)
 
+        self.act_mnf = QAction("Minimum Noise Fraction (MNF)...", self)
+        self.act_mnf.triggered.connect(self.show_mnf_dialog)
+
+        self.act_sam = QAction("Spectral Angle Mapper (SAM)...", self)
+        self.act_sam.triggered.connect(self.show_sam_dialog)
+
         self.act_classification = QAction("Image Classification...", self)
         self.act_classification.triggered.connect(self.show_classification_dialog)
+
+        self.act_maxlik = QAction("Maximum Likelihood Classification...", self)
+        self.act_maxlik.triggered.connect(self.show_maxlik_dialog)
 
         self.act_roi = QAction("Region of Interest (ROI) Tool...", self)
         self.act_roi.triggered.connect(self.show_roi_dialog)
@@ -290,7 +301,10 @@ class OpenENVIMainWindow(QMainWindow):
         self.menu_tools.addAction(self.act_band_math)
         self.menu_tools.addAction(self.act_indices)
         self.menu_tools.addAction(self.act_pca)
+        self.menu_tools.addAction(self.act_mnf)
+        self.menu_tools.addAction(self.act_sam)
         self.menu_tools.addAction(self.act_classification)
+        self.menu_tools.addAction(self.act_maxlik)
         self.menu_tools.addAction(self.act_pansharpen)
         self.menu_tools.addAction(self.act_radiometry)
         self.menu_tools.addAction(self.act_stats)
@@ -354,6 +368,7 @@ class OpenENVIMainWindow(QMainWindow):
         # Data Manager -> Viewport loading
         self.dock_data_manager.load_grayscale_requested.connect(self.load_grayscale_band)
         self.dock_data_manager.load_rgb_requested.connect(self.load_rgb_composition)
+        self.dock_data_manager.close_file_requested.connect(self._on_layer_removed)
 
         # Layer Manager interactions
         self.dock_layer_manager.layer_visibility_changed.connect(self._on_layer_visibility_changed)
@@ -447,6 +462,7 @@ class OpenENVIMainWindow(QMainWindow):
         name: str,
         data: np.ndarray,
         parent_metadata: Optional[object] = None,
+        display_image: Optional[np.ndarray] = None,
     ) -> RasterLayer:
         """Register an in-memory computed array as a new project raster layer."""
         parent_meta = parent_metadata
@@ -463,6 +479,12 @@ class OpenENVIMainWindow(QMainWindow):
             is_visible=True,
         )
 
+        if display_image is not None:
+            layer.set_thematic_image(display_image)
+            if not layer.metadata.raw_header:
+                layer.metadata.raw_header = {}
+            layer.metadata.raw_header["file type"] = "ENVI Classification"
+
         self._readers[layer_id] = reader
         self._layers[layer_id] = layer
         self._active_layer_id = layer_id
@@ -471,12 +493,12 @@ class OpenENVIMainWindow(QMainWindow):
         self.dock_data_manager.add_dataset(layer)
 
         # Display immediately in main view
-        if data.ndim == 3 and data.shape[-1] == 3:
-            self.main_view.display_raster(data, reset_view=False)
-        elif data.ndim == 2:
+        if display_image is not None:
+            self.main_view.display_raster(display_image, reset_view=False)
+        elif data.ndim == 3 and data.shape[-1] == 3:
             self.main_view.display_raster(data, reset_view=False)
         else:
-            self.main_view.display_raster(data[0], reset_view=False)
+            self.main_view.display_raster(reader.read_band(0), reset_view=False)
 
         event_bus.status_message.emit(f"Created derived layer: {name}", 3000)
         return layer
@@ -742,9 +764,15 @@ class OpenENVIMainWindow(QMainWindow):
             self.show_radiometry_dialog()
         elif any(k in tl for k in ("ndvi", "ndwi", "evi", "savi", "nbr", "index", "indices")):
             self.show_indices_dialog()
-        elif "pca" in tl or "mnf" in tl or "principal" in tl:
+        elif "mnf" in tl:
+            self.show_mnf_dialog()
+        elif "pca" in tl or "principal" in tl:
             self.show_pca_dialog()
-        elif any(k in tl for k in ("kmeans", "isodata", "classification", "sam", "maxlik")):
+        elif "sam" in tl:
+            self.show_sam_dialog()
+        elif "maxlik" in tl or "maximum" in tl:
+            self.show_maxlik_dialog()
+        elif any(k in tl for k in ("kmeans", "isodata", "classification")):
             self.show_classification_dialog()
         elif "roi" in tl or "region" in tl:
             self.show_roi_dialog()
@@ -855,6 +883,34 @@ class OpenENVIMainWindow(QMainWindow):
         dlg = PCADialog(
             layer=self._layers[self._active_layer_id],
             reader=self._readers[self._active_layer_id],
+            mode="pca",
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_mnf_dialog(self) -> None:
+        """Open Minimum Noise Fraction (MNF) transform dialog."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = PCADialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            mode="mnf",
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_sam_dialog(self) -> None:
+        """Open Spectral Angle Mapper (SAM) supervised classification dialog."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = SAMDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
             parent=self,
         )
         dlg.result_generated.connect(self.add_derived_layer)
@@ -871,6 +927,20 @@ class OpenENVIMainWindow(QMainWindow):
             parent=self,
         )
         dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_maxlik_dialog(self) -> None:
+        """Open Maximum Likelihood Classification (MLC) supervised dialog."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = MaximumLikelihoodDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.open_roi_tool_requested.connect(self.show_roi_dialog)
         dlg.exec()
 
     def show_roi_dialog(self, target_layer_id: Optional[str] = None) -> None:
@@ -1049,7 +1119,10 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_band_math.setText(tr("action.band_math"))
         self.act_indices.setText(tr("action.indices"))
         self.act_pca.setText(tr("action.pca"))
+        self.act_mnf.setText(tr("action.mnf"))
+        self.act_sam.setText(tr("action.sam"))
         self.act_classification.setText(tr("action.classification"))
+        self.act_maxlik.setText(tr("action.maxlik"))
         self.act_pansharpen.setText(tr("menu.pansharpen"))
         self.act_radiometry.setText(tr("menu.radiometry"))
         self.act_stats.setText(tr("action.stats"))

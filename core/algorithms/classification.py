@@ -4,7 +4,7 @@ Provides K-Means, ISODATA clustering, and thematic color rendering
 for multispectral and hyperspectral imagery.
 """
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
 
@@ -174,26 +174,181 @@ def isodata_clustering(
 
 def create_thematic_rgb(
     class_map: np.ndarray,
-    palette: Optional[List[Tuple[int, int, int]]] = None,
+    palette: Optional[Union[List[Tuple[int, int, int]], Dict[int, Tuple[int, int, int]]]] = None,
+    unclassified_color: Tuple[int, int, int] = (0, 0, 0),
 ) -> np.ndarray:
     """Convert a 2D integer class map into an RGB thematic color image.
 
     Args:
         class_map: 2D numpy array of shape (lines, samples).
-        palette: Optional list of (R, G, B) tuples.
+        palette: Optional list or dict mapping class indices to (R, G, B) tuples.
+        unclassified_color: Color for unclassified pixels (class < 0). Default: black.
 
     Returns:
         3D numpy array of shape (lines, samples, 3) in uint8 [0, 255].
     """
-    if palette is None:
-        palette = DEFAULT_THEMATIC_PALETTE
-
     lines, samples = class_map.shape
     rgb_image = np.zeros((lines, samples, 3), dtype=np.uint8)
 
-    for class_idx in np.unique(class_map):
-        color = palette[int(class_idx) % len(palette)]
-        mask = (class_map == class_idx)
-        rgb_image[mask] = color
+    if isinstance(palette, dict):
+        for class_idx in np.unique(class_map):
+            if int(class_idx) < 0:
+                color = unclassified_color
+            else:
+                color = palette.get(int(class_idx), unclassified_color)
+            mask = (class_map == class_idx)
+            rgb_image[mask] = color
+    else:
+        pal = palette if palette is not None else DEFAULT_THEMATIC_PALETTE
+        for class_idx in np.unique(class_map):
+            if int(class_idx) < 0:
+                color = unclassified_color
+            else:
+                color = pal[int(class_idx) % len(pal)]
+            mask = (class_map == class_idx)
+            rgb_image[mask] = color
 
     return rgb_image
+
+
+def maximum_likelihood_classification(
+    cube: np.ndarray,
+    training_data: Dict[int, np.ndarray],
+    probability_threshold: float = 0.0,
+    use_sample_priors: bool = False,
+    progress_callback=None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Perform Supervised Maximum Likelihood Classification (MLC).
+
+    Estimates class mean vectors and regularized covariance matrices from training
+    samples (typically derived from ROIs). Evaluates multivariate normal discriminant
+    scores for each pixel and applies optional Chi-Square thresholding to filter
+    low-confidence pixels as unclassified (-1).
+
+    Args:
+        cube: 3D numpy array of shape (bands, lines, samples).
+        training_data: Dict mapping class index (0, 1, 2, ...) to 2D numpy array of
+            training spectra of shape (N_samples, bands).
+        probability_threshold: P-value threshold (0.0 to 1.0). If > 0, pixels with
+            Mahalanobis distance exceeding the critical Chi-Square value (p < threshold)
+            are assigned to -1 (unclassified).
+        use_sample_priors: If True, uses training sample proportions as class priors;
+            otherwise uses equal priors (1 / K).
+        progress_callback: Optional callable(percent: int, message: str).
+
+    Returns:
+        Tuple of (class_map, rule_distances):
+        - class_map: 2D array of shape (lines, samples) with integer class labels or -1.
+        - rule_distances: 3D array of shape (num_classes, lines, samples) of squared
+          Mahalanobis distances to each class.
+    """
+    bands, lines, samples = cube.shape
+    num_pixels = lines * samples
+    class_indices = sorted(training_data.keys())
+    num_classes = len(class_indices)
+
+    if num_classes < 2:
+        raise ValueError("Maximum Likelihood Classification requires at least 2 training classes.")
+
+    # 1. Parameter Estimation (means, regularized covariances, log-determinants)
+    means = []
+    inv_covs = []
+    const_terms = []
+    total_samples = sum(len(training_data[c]) for c in class_indices)
+
+    for c in class_indices:
+        X_c = training_data[c].astype(np.float64)
+        n_c = len(X_c)
+        if n_c < 1:
+            raise ValueError(f"Training class {c} has 0 valid samples.")
+
+        mu_c = np.mean(X_c, axis=0)  # (bands,)
+        if n_c > 1:
+            cov_c = np.cov(X_c, rowvar=False)
+            if cov_c.ndim == 0:
+                cov_c = cov_c.reshape(1, 1)
+        else:
+            cov_c = np.zeros((bands, bands), dtype=np.float64)
+
+        # Regularization: ensure strictly positive-definite matrix even when n_c < bands
+        trace_val = float(np.trace(cov_c))
+        sigma2_avg = trace_val / bands if trace_val > 1e-12 else 1.0
+        reg_cov = cov_c + (1e-4 * sigma2_avg + 1e-6) * np.eye(bands, dtype=np.float64)
+
+        # Inversion and log determinant
+        inv_cov = np.linalg.inv(reg_cov)
+        sign, log_det = np.linalg.slogdet(reg_cov)
+        if sign <= 0:
+            # Fallback for numerical drift
+            log_det = np.sum(np.log(np.maximum(np.linalg.eigvalsh(reg_cov), 1e-12)))
+
+        prior = (n_c / total_samples) if use_sample_priors and total_samples > 0 else (1.0 / num_classes)
+        const = np.log(max(prior, 1e-12)) - 0.5 * log_det
+
+        means.append(mu_c)
+        inv_covs.append(inv_cov)
+        const_terms.append(const)
+
+    # Chi-Square critical threshold for unclassified pixels
+    chi2_crit = None
+    if probability_threshold > 0.0:
+        try:
+            import scipy.stats
+            chi2_crit = float(scipy.stats.chi2.ppf(1.0 - probability_threshold, df=bands))
+        except Exception:
+            # Asymptotic Wilson-Hilferty approximation if scipy not available
+            z = 1.96 if probability_threshold <= 0.05 else 1.64
+            chi2_crit = bands * ((1.0 - 2.0 / (9.0 * bands) + z * np.sqrt(2.0 / (9.0 * bands))) ** 3)
+
+    # 2. Prediction in memory-efficient chunks
+    flat_cube = cube.reshape(bands, num_pixels).T.astype(np.float64)  # (num_pixels, bands)
+    class_map_flat = np.full(num_pixels, -1, dtype=np.int32)
+    rule_distances_flat = np.empty((num_classes, num_pixels), dtype=np.float32)
+
+    chunk_size = 100_000
+    total_chunks = (num_pixels + chunk_size - 1) // chunk_size
+
+    for chunk_i, start in enumerate(range(0, num_pixels, chunk_size)):
+        end = min(start + chunk_size, num_pixels)
+        X_chunk = flat_cube[start:end]  # (M, bands)
+        M = end - start
+
+        # Check for valid (finite) pixels
+        valid_mask = np.all(np.isfinite(X_chunk), axis=1)
+
+        scores = np.full((M, num_classes), -np.inf, dtype=np.float64)
+        dists = np.full((num_classes, M), np.inf, dtype=np.float32)
+
+        if np.any(valid_mask):
+            X_valid = X_chunk[valid_mask]  # (V, bands)
+            for k in range(num_classes):
+                delta = X_valid - means[k]  # (V, bands)
+                # D_k^2 = sum((delta @ inv_cov) * delta, axis=1)
+                D2 = np.sum((delta @ inv_covs[k]) * delta, axis=1)
+                dists[k, valid_mask] = D2.astype(np.float32)
+                # Discriminant: const - 0.5 * D2
+                scores[valid_mask, k] = const_terms[k] - 0.5 * D2
+
+            best_class_idx = np.argmax(scores[valid_mask], axis=1)
+            best_mapped = np.array([class_indices[k] for k in best_class_idx], dtype=np.int32)
+
+            if chi2_crit is not None:
+                # Find the Mahalanobis distance of the winning class
+                # Create index array for picking from dists
+                best_d2 = dists[best_class_idx, np.arange(M)[valid_mask]]
+                unclassified_mask = best_d2 > chi2_crit
+                best_mapped[unclassified_mask] = -1
+
+            class_map_flat[start:end][valid_mask] = best_mapped
+
+        rule_distances_flat[:, start:end] = dists
+
+        if progress_callback:
+            pct = 40 + int(50 * (chunk_i + 1) / total_chunks)
+            progress_callback(pct, f"Classifying pixels ({chunk_i + 1}/{total_chunks})...")
+
+    class_map = class_map_flat.reshape(lines, samples)
+    rule_distances = rule_distances_flat.reshape(num_classes, lines, samples)
+
+    return class_map, rule_distances
+

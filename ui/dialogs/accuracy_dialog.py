@@ -11,6 +11,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -73,6 +74,11 @@ class AccuracyAssessmentDialog(QDialog):
         self.cb_reference = QComboBox()
         h_ref.addWidget(self.cb_reference, stretch=1)
         l_inputs.addLayout(h_ref)
+
+        # Ignore unclassified pixels (-1)
+        self.chk_ignore_unclassified = QCheckBox(tr("accuracy.ignore_unclassified"))
+        self.chk_ignore_unclassified.setChecked(True)
+        l_inputs.addWidget(self.chk_ignore_unclassified)
 
         self._populate_layers()
         layout.addWidget(grp_layers)
@@ -152,7 +158,11 @@ class AccuracyAssessmentDialog(QDialog):
                 from core.algorithms.pansharpen import resample_band_to_grid
                 r_data = resample_band_to_grid(r_data, c_data.shape[0], c_data.shape[1])
 
-            res = compute_confusion_matrix(c_data, r_data)
+            nodata_val = -1 if self.chk_ignore_unclassified.isChecked() else (
+                cls_layer.metadata.nodata if cls_layer.metadata.nodata is not None else None
+            )
+
+            res = compute_confusion_matrix(c_data, r_data, nodata_val=nodata_val)
             self._accuracy_result = res
 
             self.lbl_oa.setText(f"{tr('accuracy.oa')} {res['overall_accuracy']:.2f}%")

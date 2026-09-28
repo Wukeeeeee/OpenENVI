@@ -4,7 +4,7 @@ Provides Principal Component Analysis (PCA), Minimum Noise Fraction (MNF),
 and Spectral Angle Mapper (SAM) for hyperspectral data reduction and classification.
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 import numpy as np
 
 
@@ -140,14 +140,19 @@ def compute_mnf(
 def spectral_angle_mapper(
     cube: np.ndarray,
     reference_spectra: np.ndarray,
+    max_angle: Optional[float] = None,
+    unclassified_val: int = -1,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Perform Spectral Angle Mapper (SAM) classification.
 
     Measures the spectral angle between each pixel vector and endmember reference spectra.
+    Pixels with minimum spectral angle greater than max_angle are assigned unclassified_val.
 
     Args:
         cube: 3D numpy array of shape (bands, lines, samples).
         reference_spectra: 2D numpy array of shape (num_endmembers, bands).
+        max_angle: Optional maximum spectral angle threshold in radians.
+        unclassified_val: Value assigned to pixels exceeding max_angle or containing NaN (default -1).
 
     Returns:
         Tuple of (rule_images, classification_map)
@@ -159,6 +164,9 @@ def spectral_angle_mapper(
 
     # Reshape cube to (bands, N)
     pixel_vectors = cube.reshape(bands, -1).astype(np.float32)  # shape (bands, N)
+
+    # Detect invalid pixels (NaN or Inf)
+    invalid_mask = np.any(~np.isfinite(pixel_vectors), axis=0)
 
     # Calculate L2 norm of pixel vectors
     pixel_norms = np.linalg.norm(pixel_vectors, axis=0, keepdims=True)  # (1, N)
@@ -180,7 +188,17 @@ def spectral_angle_mapper(
     angles = np.arccos(cos_sim)  # (M, N)
 
     # Minimum angle determines assigned class
-    class_map = np.argmin(angles, axis=0).reshape(lines, samples).astype(np.int32)
+    class_indices = np.argmin(angles, axis=0).astype(np.int32)
+
+    if max_angle is not None:
+        min_angles = np.min(angles, axis=0)
+        class_indices[min_angles > float(max_angle)] = unclassified_val
+
+    if np.any(invalid_mask):
+        class_indices[invalid_mask] = unclassified_val
+        angles[:, invalid_mask] = np.nan
+
+    class_map = class_indices.reshape(lines, samples).astype(np.int32)
     rule_images = angles.reshape(num_endmembers, lines, samples).astype(np.float32)
 
     return rule_images, class_map

@@ -32,7 +32,7 @@ from core.algorithms.pansharpen import brovey_pansharpen, gram_schmidt_pansharpe
 from core.events import event_bus
 from core.i18n import tr
 from core.io.base import BaseRasterReader
-from core.models import RasterLayer, RasterMetadata
+from core.models import BandInfo, RasterLayer, RasterMetadata
 
 
 class PanSharpenWorker(QThread):
@@ -99,7 +99,38 @@ class PanSharpenWorker(QThread):
                     progress_callback=lambda s, t: self.progress.emit(s, t),
                 )
 
-            self.finished.emit(self.name, fused, pan_meta)
+            # 4. Construct enriched metadata preserving Pan spatial grid and MS spectral details
+            fused_band_details = []
+            ms_meta = self.ms_reader.metadata
+            for idx, b in enumerate(self.selected_bands):
+                if ms_meta and ms_meta.band_details and b < len(ms_meta.band_details):
+                    orig_b = ms_meta.band_details[b]
+                    fused_band_details.append(
+                        BandInfo(
+                            index=idx,
+                            name=orig_b.name or f"Fused Band {b + 1}",
+                            wavelength=orig_b.wavelength,
+                            wavelength_unit=orig_b.wavelength_unit,
+                            fwhm=orig_b.fwhm,
+                        )
+                    )
+                else:
+                    fused_band_details.append(BandInfo(index=idx, name=f"Fused Band {b + 1}"))
+
+            fused_meta = RasterMetadata(
+                width=pan_meta.width if pan_meta else fused.shape[1],
+                height=pan_meta.height if pan_meta else fused.shape[0],
+                bands=len(self.selected_bands),
+                dtype=str(fused.dtype),
+                crs=pan_meta.crs if pan_meta else (ms_meta.crs if ms_meta else None),
+                transform=pan_meta.transform if pan_meta else (ms_meta.transform if ms_meta else None),
+                nodata=ms_meta.nodata if ms_meta else None,
+                band_details=fused_band_details,
+                default_bands=(0, 1, 2) if len(self.selected_bands) >= 3 else (0,),
+                raw_header=dict(ms_meta.raw_header) if ms_meta and ms_meta.raw_header else {},
+            )
+
+            self.finished.emit(self.name, fused, fused_meta)
         except Exception as e:
             self.failed.emit(str(e))
 

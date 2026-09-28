@@ -30,7 +30,7 @@ from core.algorithms.radiometry import execute_calibration, extract_landsat_cal_
 from core.events import event_bus
 from core.i18n import tr
 from core.io.base import BaseRasterReader
-from core.models import RasterLayer
+from core.models import BandInfo, RasterLayer, RasterMetadata
 
 
 class RadiometryWorker(QThread):
@@ -70,7 +70,38 @@ class RadiometryWorker(QThread):
                 custom_sun_elev=self.custom_sun_elev,
                 progress_callback=lambda s, t: self.progress.emit(s, t),
             )
-            self.finished.emit(self.name, result, self.reader.metadata)
+            # Build calibrated metadata for the selected band subset
+            parent_meta = self.reader.metadata
+            cal_band_details = []
+            for idx, b in enumerate(self.band_indices):
+                if parent_meta and parent_meta.band_details and b < len(parent_meta.band_details):
+                    orig_b = parent_meta.band_details[b]
+                    cal_band_details.append(
+                        BandInfo(
+                            index=idx,
+                            name=f"{orig_b.name} ({self.cal_type})" if orig_b.name else f"Band {b + 1} ({self.cal_type})",
+                            wavelength=orig_b.wavelength,
+                            wavelength_unit=orig_b.wavelength_unit,
+                            fwhm=orig_b.fwhm,
+                        )
+                    )
+                else:
+                    cal_band_details.append(BandInfo(index=idx, name=f"Band {b + 1} ({self.cal_type})"))
+
+            cal_meta = RasterMetadata(
+                width=parent_meta.width if parent_meta else (result.shape[1] if result.ndim == 2 else result.shape[1]),
+                height=parent_meta.height if parent_meta else (result.shape[0] if result.ndim == 2 else result.shape[0]),
+                bands=len(self.band_indices),
+                dtype=str(result.dtype),
+                crs=parent_meta.crs if parent_meta else None,
+                transform=parent_meta.transform if parent_meta else None,
+                nodata=parent_meta.nodata if parent_meta else None,
+                band_details=cal_band_details,
+                default_bands=(0, 1, 2) if len(self.band_indices) >= 3 else (0,),
+                raw_header=dict(parent_meta.raw_header) if parent_meta and parent_meta.raw_header else {},
+            )
+
+            self.finished.emit(self.name, result, cal_meta)
         except Exception as e:
             self.failed.emit(str(e))
 

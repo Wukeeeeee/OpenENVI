@@ -194,12 +194,15 @@ class SpectralProfileDock(QDockWidget):
         self._replot_current()
 
         from core.i18n import tr
+        finite = values[np.isfinite(values)]
+        min_v = float(np.min(finite)) if len(finite) > 0 else 0.0
+        max_v = float(np.max(finite)) if len(finite) > 0 else 0.0
         self._last_stats = {
             "x": x,
             "y": y,
             "bands": len(values),
-            "min_val": float(np.min(values)),
-            "max_val": float(np.max(values)),
+            "min_val": min_v,
+            "max_val": max_v,
         }
         self._lbl_info.setText(tr("spectral_profile.info_stats").format(**self._last_stats))
 
