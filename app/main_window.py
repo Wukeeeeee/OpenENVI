@@ -34,6 +34,7 @@ from ui.dialogs.continuum_dialog import ContinuumRemovalDialog
 from ui.dialogs.export_dialog import ExportRasterDialog
 from ui.dialogs.indices_dialog import IndicesDialog
 from ui.dialogs.maxlik_dialog import MaximumLikelihoodDialog
+from ui.dialogs.mosaic_dialog import MosaicDialog
 from ui.dialogs.pansharpen_dialog import PanSharpenDialog
 from ui.dialogs.pca_dialog import PCADialog
 from ui.dialogs.radiometry_dialog import RadiometryDialog
@@ -231,6 +232,9 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_stacking = QAction("Layer Stacking...", self)
         self.act_stacking.triggered.connect(self.show_layer_stacking_dialog)
 
+        self.act_mosaic = QAction("Mosaicking...", self)
+        self.act_mosaic.triggered.connect(self.show_mosaic_dialog)
+
         self.act_resize = QAction("Resize Data (Spatial/Spectral)...", self)
         self.act_resize.triggered.connect(self.show_resize_dialog)
 
@@ -324,6 +328,7 @@ class OpenENVIMainWindow(QMainWindow):
         self.menu_tools.addAction(self.act_radiometry)
         self.menu_tools.addAction(self.act_stats)
         self.menu_tools.addAction(self.act_stacking)
+        self.menu_tools.addAction(self.act_mosaic)
         self.menu_tools.addAction(self.act_resize)
         self.menu_tools.addAction(self.act_color)
         self.menu_tools.addAction(self.act_continuum)
@@ -803,6 +808,8 @@ class OpenENVIMainWindow(QMainWindow):
             self.show_stats_dialog()
         elif "stack" in tl:
             self.show_layer_stacking_dialog()
+        elif "mosaic" in tl:
+            self.show_mosaic_dialog()
         elif "resize" in tl or "subset" in tl:
             self.show_resize_dialog()
         elif "color" in tl or "hsv" in tl:
@@ -1126,6 +1133,16 @@ class OpenENVIMainWindow(QMainWindow):
         dlg.result_generated.connect(self.add_derived_layer)
         dlg.exec()
 
+    def show_mosaic_dialog(self) -> None:
+        """Open Mosaicking dialog to combine two or more open rasters."""
+        layers = self.get_available_layers()
+        if not layers:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = MosaicDialog(layers, parent=self)
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
     def show_continuum_removal_dialog(self) -> None:
         """Open Continuum Removal dialog for active layer."""
         if not self._active_layer_id:
@@ -1203,6 +1220,7 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_radiometry.setText(tr("menu.radiometry"))
         self.act_stats.setText(tr("action.stats"))
         self.act_stacking.setText(tr("menu.stacking"))
+        self.act_mosaic.setText(tr("menu.mosaic"))
         self.act_resize.setText(tr("menu.resize"))
         self.act_color.setText(tr("menu.color"))
         self.act_continuum.setText(tr("menu.continuum"))

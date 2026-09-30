@@ -27,6 +27,7 @@ IMPLEMENTED_TOOLS = {
     "stats",
     "stacking",
     "resize",
+    "mosaic",
     # Transforms
     "pansharpen",
     "radiometry",

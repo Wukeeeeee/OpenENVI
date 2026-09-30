@@ -11,6 +11,7 @@ import time
 import tempfile
 import numpy as np
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from app.main_window import OpenENVIMainWindow
@@ -552,4 +553,89 @@ def test_e2e_sff_dialog(qapp, sample_dataset):
     assert callable(getattr(window, "show_sff_dialog"))
 
     dlg.close()
+    window.close()
+
+
+def test_e2e_mosaic_dialog(qapp, sample_dataset):
+    """Verify Mosaicking combines two georeferenced layers into one raster."""
+    from ui.dialogs.mosaic_dialog import MosaicDialog
+    from ui.toolbox import IMPLEMENTED_TOOLS
+    from core.models import RasterMetadata
+
+    hdr_path, _, _ = sample_dataset
+    window = OpenENVIMainWindow()
+    window.open_raster_file(hdr_path)
+
+    def geo_meta(origin_x):
+        return RasterMetadata(
+            width=16, height=12, bands=3, dtype="float32", crs="EPSG:32650",
+            transform=(30.0, 0.0, origin_x, 0.0, -30.0, 4000000.0), nodata=None,
+        )
+
+    left = window.add_derived_layer(
+        "E2E_Mosaic_Left",
+        np.tile(np.array([1.0, 2.0, 3.0], np.float32), (12, 16, 1)),
+        parent_metadata=geo_meta(500000.0),
+    )
+    right = window.add_derived_layer(
+        "E2E_Mosaic_Right",
+        np.tile(np.array([7.0, 8.0, 9.0], np.float32), (12, 16, 1)),
+        parent_metadata=geo_meta(500240.0),  # 8 pixels east: a 8-pixel overlap
+    )
+
+    layers = window.get_available_layers()
+    dlg = MosaicDialog(layers, parent=window)
+
+    # The mosaic target lists every georeferenced layer and previews the union grid
+    assert dlg.table_inputs.rowCount() == len(layers)
+    assert dlg.btn_ok.isEnabled()
+
+    # Mosaicking is a many-to-one choice: keep only the two tiles we added, so the
+    # 10 m ENVI sample scene stops dictating the reference resolution.
+    dlg._set_all(False)
+    for row in range(dlg.table_inputs.rowCount()):
+        item = dlg.table_inputs.item(row, 0)
+        if item.data(Qt.UserRole) in (left.layer_id, right.layer_id):
+            item.setCheckState(Qt.Checked)
+    dlg._update_grid_preview()
+    # 16 px each, overlapping by 8, so the union is 24 x 12 at 30 m.
+    assert "24 x 12" in dlg.lbl_grid.text(), dlg.lbl_grid.text()
+
+    captured = {}
+    dlg.result_generated.connect(
+        lambda name, cube, meta: captured.update(name=name, cube=cube, meta=meta)
+    )
+
+    dlg.cmb_resample.setCurrentIndex(dlg.cmb_resample.findData("nearest"))
+    dlg.spin_feather.setValue(4.0)
+    dlg.txt_out_name.setText("E2E_Mosaic")
+    dlg._start()
+
+    worker = dlg._worker
+    assert worker is not None
+    assert worker.wait(60000)
+    # run() has finished, but the worker's signals are queued, so drain them.
+    for _ in range(50):
+        QApplication.processEvents()
+        if "cube" in captured:
+            break
+        time.sleep(0.02)
+
+    assert "cube" in captured, captured
+    cube, meta = captured["cube"], captured["meta"]
+    assert captured["name"] == "E2E_Mosaic"
+    # 16 px each, overlapping by 8, so the union is 24 px wide.
+    assert cube.shape == (12, 24, 3)
+    assert meta.crs == "EPSG:32650"
+    assert meta.transform[4] < 0
+
+    # Non-overlapping halves keep their own source values; the seam is blended.
+    np.testing.assert_allclose(cube[:, :8, 0], 1.0, rtol=1e-5)
+    np.testing.assert_allclose(cube[:, 16:, 0], 7.0, rtol=1e-5)
+    assert cube[:, 8:16, 0].min() >= 1.0 and cube[:, 8:16, 0].max() <= 7.0
+
+    # "mosaic" is offered in the toolbox, and the window routes it to a dialog
+    assert "mosaic" in IMPLEMENTED_TOOLS
+    assert callable(getattr(window, "show_mosaic_dialog"))
+
     window.close()

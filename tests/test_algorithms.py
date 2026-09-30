@@ -642,3 +642,208 @@ def test_least_squares_abundances_recover_planted_abundances():
     assert recovered.min() >= 0.0
     got = recovered.reshape(3, -1).T
     np.testing.assert_allclose(got, abund, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Mosaicking
+# ---------------------------------------------------------------------------
+
+
+def _geo_tile(shape, fill, origin_x, origin_y, crs="EPSG:32650", res=30.0, nodata=None):
+    """Single-band georeferenced reader of constant value.
+
+    ``origin_y`` is the y coordinate of the tile's TOP edge, matching the
+    north-up convention the GeoTIFF reader writes.
+    """
+    from core.io.memory import MemoryRasterReader
+    from core.models import RasterMetadata
+
+    data = np.full(shape, float(fill), dtype=np.float32)
+    meta = RasterMetadata(
+        width=shape[1],
+        height=shape[0],
+        bands=1,
+        dtype="float32",
+        crs=crs,
+        transform=(res, 0.0, origin_x, 0.0, -res, origin_y),
+        nodata=nodata,
+    )
+    return MemoryRasterReader(data, name=f"tile_{origin_x}_{origin_y}", parent_metadata=meta)
+
+
+def test_build_mosaic_grid_unions_adjacent_tiles():
+    """Two touching tiles must produce one grid twice as wide as either."""
+    from core.algorithms.mosaic import build_mosaic_grid
+
+    left = _geo_tile((10, 10), 1.0, 500000.0, 4000000.0)
+    right = _geo_tile((10, 10), 2.0, 500300.0, 4000000.0)
+
+    transform, width, height, crs = build_mosaic_grid([left, right])
+
+    assert (width, height) == (20, 10)
+    assert crs == "EPSG:32650"
+    # North-up: the top edge is the union top and row 0 advances southward.
+    assert transform.f == pytest.approx(4000000.0)
+    assert transform.e < 0
+    assert transform.c == pytest.approx(500000.0)
+
+
+def test_mosaic_adjacent_tiles_keeps_every_value():
+    """Side-by-side tiles must land side by side, not stacked or flipped."""
+    from core.algorithms.mosaic import mosaic_rasters
+
+    left = _geo_tile((8, 10), 5.0, 500000.0, 4000000.0)
+    right = _geo_tile((8, 10), 9.0, 500300.0, 4000000.0)
+
+    cube, meta = mosaic_rasters([left, right], resample_method="nearest")
+
+    assert cube.shape == (8, 20, 1)
+    np.testing.assert_allclose(cube[:, :10, 0], 5.0, rtol=1e-5)
+    np.testing.assert_allclose(cube[:, 10:, 0], 9.0, rtol=1e-5)
+    assert meta.crs == "EPSG:32650"
+    assert meta.transform[4] < 0
+
+
+def test_mosaic_fills_uncovered_area_with_background():
+    """A gap between tiles must carry background_value, not NaN."""
+    from core.algorithms.mosaic import mosaic_rasters
+
+    left = _geo_tile((6, 6), 3.0, 500000.0, 4000000.0)
+    # The second tile starts 12 pixels east, leaving a 6-pixel hole between them.
+    right = _geo_tile((6, 6), 7.0, 500360.0, 4000000.0)
+
+    cube, _ = mosaic_rasters([left, right], background_value=-1.0, resample_method="nearest")
+
+    assert cube.shape == (6, 18, 1)
+    np.testing.assert_allclose(cube[:, 6:12, 0], -1.0)
+    np.testing.assert_allclose(cube[:, :6, 0], 3.0, rtol=1e-5)
+    np.testing.assert_allclose(cube[:, 12:, 0], 7.0, rtol=1e-5)
+
+
+def test_mosaic_feathers_overlapping_tiles():
+    """With feathering the overlap becomes a gradient instead of a hard switch."""
+    from core.algorithms.mosaic import mosaic_rasters
+
+    left = _geo_tile((20, 20), 0.0, 500000.0, 4000000.0)
+    right = _geo_tile((20, 20), 100.0, 500300.0, 4000000.0)
+
+    cube, _ = mosaic_rasters([left, right], feather_pixels=8.0, resample_method="nearest")
+
+    overlap = cube[:, 10:20, 0]
+    # Monotonic across the 10-pixel overlap, strictly between the two inputs.
+    assert np.all(np.diff(overlap, axis=1) > 0)
+    assert overlap.min() > 0.0 and overlap.max() < 100.0
+    # Where only one source reaches, that source's value survives intact.
+    np.testing.assert_allclose(cube[:, 2, 0], 0.0, rtol=1e-5)
+    assert cube[:, 19, 0].min() > 90.0
+
+    # Unweighted averaging makes the whole overlap one constant, so the seam is a
+    # step; feathering is what turns it into a ramp.
+    hard, _ = mosaic_rasters([left, right], feather_pixels=0.0, resample_method="nearest")
+    assert np.ptp(hard[:, 10:20, 0]) == 0.0
+
+
+def test_mosaic_keeps_multiple_bands_separate():
+    """Bands must not bleed into each other when mosaicking."""
+    from core.algorithms.mosaic import mosaic_rasters
+    from core.io.memory import MemoryRasterReader
+    from core.models import RasterMetadata
+
+    def tile(x, first, second):
+        data = np.stack(
+            [np.full((6, 6), first, np.float32), np.full((6, 6), second, np.float32)],
+            axis=-1,
+        )
+        meta = RasterMetadata(
+            width=6, height=6, bands=2, dtype="float32", crs="EPSG:32650",
+            transform=(30.0, 0.0, x, 0.0, -30.0, 4000000.0), nodata=None,
+        )
+        return MemoryRasterReader(data, name=f"multi_{x}", parent_metadata=meta)
+
+    cube, meta = mosaic_rasters([tile(500000.0, 1.0, 2.0), tile(500180.0, 3.0, 4.0)])
+
+    assert cube.shape == (6, 12, 2)
+    assert meta.bands == 2
+    np.testing.assert_allclose(cube[:, :6, 0], 1.0, rtol=1e-5)
+    np.testing.assert_allclose(cube[:, :6, 1], 2.0, rtol=1e-5)
+    np.testing.assert_allclose(cube[:, 6:, 0], 3.0, rtol=1e-5)
+    np.testing.assert_allclose(cube[:, 6:, 1], 4.0, rtol=1e-5)
+
+
+def test_mosaic_respects_source_nodata():
+    """A NoData source pixel must not bleed its sentinel into the output."""
+    from core.algorithms.mosaic import mosaic_rasters
+    from core.io.memory import MemoryRasterReader
+    from core.models import RasterMetadata
+
+    holed = np.full((6, 6), -9999.0, dtype=np.float32)
+    holed[:, :3] = 12.0
+    reader = MemoryRasterReader(
+        holed, name="holed", parent_metadata=RasterMetadata(
+            width=6, height=6, bands=1, dtype="float32", crs="EPSG:32650",
+            transform=(30.0, 0.0, 500180.0, 0.0, -30.0, 4000000.0), nodata=-9999.0,
+        ),
+    )
+    good = _geo_tile((6, 6), 4.0, 500000.0, 4000000.0)
+
+    cube, _ = mosaic_rasters([good, reader], resample_method="bilinear")
+
+    assert cube.min() > -100.0, "NoData sentinel leaked into the mosaic"
+    np.testing.assert_allclose(cube[:, 6:9, 0], 12.0, rtol=1e-5)
+
+
+def test_mosaic_reports_progress_per_band():
+    """The progress callback must fire once per band and finish at the total."""
+    from core.algorithms.mosaic import mosaic_rasters
+
+    left = _geo_tile((6, 6), 1.0, 500000.0, 4000000.0)
+    right = _geo_tile((6, 6), 2.0, 500180.0, 4000000.0)
+    seen = []
+
+    mosaic_rasters([left, right], progress_callback=lambda c, t: seen.append((c, t)))
+
+    assert seen == [(1, 1)]
+
+
+def test_mosaic_rejects_mismatched_band_counts():
+    """Inputs with different band counts cannot share one output grid."""
+    from core.algorithms.mosaic import mosaic_rasters
+    from core.io.memory import MemoryRasterReader
+    from core.models import RasterMetadata
+
+    def tile(x, bands):
+        meta = RasterMetadata(
+            width=4, height=4, bands=bands, dtype="float32", crs="EPSG:32650",
+            transform=(30.0, 0.0, x, 0.0, -30.0, 4000000.0), nodata=None,
+        )
+        return MemoryRasterReader(
+            np.ones((4, 4, bands), np.float32), name=f"b{bands}_{x}", parent_metadata=meta
+        )
+
+    with pytest.raises(ValueError, match="same band count"):
+        mosaic_rasters([tile(500000.0, 1), tile(500120.0, 2)])
+
+
+def test_mosaic_rejects_empty_input_and_unknown_resampling():
+    """Empty input and a bogus resampling name must both raise cleanly."""
+    from core.algorithms.mosaic import mosaic_rasters
+
+    with pytest.raises(ValueError, match="No input rasters"):
+        mosaic_rasters([])
+
+    tile = _geo_tile((4, 4), 1.0, 500000.0, 4000000.0)
+    with pytest.raises(ValueError, match="Unknown resampling"):
+        mosaic_rasters([tile], resample_method="sinc-magic")
+
+
+def test_mosaic_accepts_gdal_cubic_spline_spelling():
+    """ENVI and GDAL disagree on the name; both spellings must work."""
+    from core.algorithms.mosaic import mosaic_rasters
+
+    left = _geo_tile((8, 8), 1.0, 500000.0, 4000000.0)
+    right = _geo_tile((8, 8), 2.0, 500240.0, 4000000.0)
+
+    aliased, _ = mosaic_rasters([left, right], resample_method="cubicspline")
+    native, _ = mosaic_rasters([left, right], resample_method="cubic_spline")
+
+    np.testing.assert_allclose(aliased, native)
