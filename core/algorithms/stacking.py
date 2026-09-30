@@ -142,6 +142,11 @@ def stack_bands(
         combined_header["band names"] = [b.name for b in combined_band_details]
         if all(b.wavelength is not None for b in combined_band_details):
             combined_header["wavelength"] = [f"{b.wavelength:.4f}" for b in combined_band_details]
+        else:
+            # Never leave the reference file's wavelength list behind: it would
+            # describe a different band count than the header now declares.
+            combined_header.pop("wavelength", None)
+            combined_header.pop("wavelength units", None)
 
     combined_metadata = RasterMetadata(
         width=target_w,

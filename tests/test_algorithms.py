@@ -428,3 +428,85 @@ def test_compute_ica():
         clamped, clamped_mixing = compute_ica(cube, num_components=99)
     assert clamped.shape[0] == 4
     assert clamped_mixing.shape == (4, 4)
+
+
+def test_mnf_whitens_noise():
+    """MNF components must carry unit-variance (whitened) noise, not the sensor covariance."""
+    rng = np.random.default_rng(0)
+    # Spatially white noise with strongly unequal per-band variances
+    var = np.array([1.0, 5.0, 20.0, 100.0])
+    cube = (rng.standard_normal((4, 200, 200)) * np.sqrt(var)[:, None, None]).astype(np.float32)
+    cube += np.array([50.0, 20.0, 10.0, 5.0], dtype=np.float32)[:, None, None]
+
+    mnf, eigenvalues = compute_mnf(cube, num_components=3)
+    assert mnf.shape == (3, 200, 200)
+
+    # Residual noise estimated from horizontal differences (the mean offset cancels).
+    # For whitened components this equals 2 * 1.0 = 2.0, since Var(x[i+1]-x[i]) = 2*Var.
+    diffs = np.stack([(mnf[k, :, 1:] - mnf[k, :, :-1]).ravel() for k in range(3)])
+    noise_var = np.diag(np.cov(diffs))
+    np.testing.assert_allclose(noise_var, 2.0, rtol=0.05)
+
+
+def test_transforms_tolerate_nan_pixels():
+    """PCA, MNF and ICA must not fail on cubes containing NoData (NaN) pixels."""
+    rng = np.random.default_rng(1)
+    cube = rng.random((6, 20, 20)).astype(np.float32)
+    cube[3, 7, 9] = np.nan
+
+    scores, eigvals, evr = compute_pca(cube, num_components=3)
+    assert scores.shape == (3, 20, 20)
+    assert np.all(np.isfinite(scores[:, :7, :])) and np.all(np.isfinite(scores[:, 8:, :]))
+
+    mnf, mnf_eig = compute_mnf(cube, num_components=3)
+    assert mnf.shape == (3, 20, 20)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConvergenceWarning)
+        ica, mixing = compute_ica(cube, num_components=3, max_iter=500)
+    assert ica.shape == (3, 20, 20)
+    assert mixing.shape == (6, 3)
+    # The NaN pixel stays NaN rather than contaminating the whole component
+    assert np.all(np.isnan(ica[:, 7, 9]))
+    assert np.all(np.isfinite(ica[:, 0, 0]))
+
+
+def test_roi_statistics_exclude_nodata():
+    """ROI statistics must ignore finite NoData sentinels, not just NaN/Inf."""
+    roi = ROI(roi_id="r", name="x", bbox=(0, 0, 4, 4))
+
+    band = np.full((10, 10), 0.5, dtype=np.float32)
+    band[0:2, 0:2] = -9999.0
+
+    # Without the sentinel hint the raw values are reported (documented behaviour)
+    legacy = roi.calculate_statistics(band)
+    assert legacy["min"] == pytest.approx(-9999.0)
+
+    # With it, the NoData block is excluded
+    stats = roi.calculate_statistics(band, nodata=-9999.0)
+    assert stats["count"] == 12
+    assert stats["mean"] == pytest.approx(0.5)
+    assert stats["min"] == pytest.approx(0.5)
+    assert stats["max"] == pytest.approx(0.5)
+
+
+def test_roi_mean_spectrum_excludes_nodata():
+    """ROI mean spectra (the SAM/SID/SVM endmember source) must skip NoData pixels."""
+    from core.io.memory import MemoryRasterReader
+    from core.models import BandInfo, RasterMetadata
+
+    cube = np.full((2, 10, 10), 100.0, dtype=np.float32)
+    cube[0, 0:2, 0:2] = -9999.0  # NoData block inside the ROI
+    meta = RasterMetadata(
+        width=10, height=10, bands=2, dtype=np.float32, nodata=-9999.0,
+        band_details=[BandInfo(index=0, name="A"), BandInfo(index=1, name="B")],
+    )
+    reader = MemoryRasterReader(cube, name="nd", parent_metadata=meta)
+
+    roi = ROI(roi_id="r", name="x", bbox=(0, 0, 4, 4))
+    spectrum = roi.calculate_mean_spectrum(reader)
+    # Band 0: 12 valid pixels at 100 plus a 2x2 NoData block that must be skipped
+
+    assert spectrum is not None
+    # Band 0 is contaminated by NoData but must still average to 100
+    np.testing.assert_allclose(spectrum, [100.0, 100.0], rtol=1e-5)

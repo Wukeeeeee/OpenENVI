@@ -43,31 +43,37 @@ def extract_landsat_cal_params(
     rad_add = {}
 
     for idx, binfo in enumerate(band_details):
-        # Match band number from name or index
+        # Map band to its MTL band number. Order matters: more specific tokens must
+        # be tested first, because "red" is a substring of "infrared" and would
+        # otherwise capture NIR / SWIR / thermal bands.
         b_num = None
         name = binfo.name.lower()
-        if "coastal" in name or "b1" in name:
+        if "coastal" in name:
             b_num = 1
-        elif "blue" in name or "b2" in name:
+        elif "blue" in name:
             b_num = 2
-        elif "green" in name or "b3" in name:
+        elif "green" in name:
             b_num = 3
-        elif "red" in name or "b4" in name:
-            b_num = 4
-        elif "nir" in name or "b5" in name:
+        elif "nir" in name or "near infrared" in name:
             b_num = 5
-        elif "swir 1" in name or "b6" in name:
+        elif "swir 1" in name or "shortwave infrared 1" in name or "swir1" in name:
             b_num = 6
-        elif "swir 2" in name or "b7" in name:
+        elif "swir 2" in name or "shortwave infrared 2" in name or "swir2" in name:
             b_num = 7
-        elif "cirrus" in name or "b9" in name:
+        elif "cirrus" in name:
             b_num = 9
-        elif "tirs 1" in name or "b10" in name:
+        elif "tirs 1" in name or "thermal infrared 1" in name:
             b_num = 10
-        elif "tirs 2" in name or "b11" in name:
+        elif "tirs 2" in name or "thermal infrared 2" in name:
             b_num = 11
+        elif "pan" in name or "panchromatic" in name:
+            b_num = 8
+        elif "red" in name:
+            b_num = 4
         else:
-            b_num = idx + 1
+            # Fall back on the band position, but only accept it when the metadata
+            # actually carries an MTL band number to read.
+            b_num = binfo.mtl_band if getattr(binfo, "mtl_band", None) else idx + 1
 
         # Look up in rescaling dictionary
         rm = rescaling.get(f"REFLECTANCE_MULT_BAND_{b_num}")
@@ -172,19 +178,24 @@ def execute_calibration(
     for step, b_idx in enumerate(band_indices):
         band_data = reader.read_band(b_idx)
 
-        # Determine parameters
+        # Determine parameters. Explicit user-supplied coefficients always take
+        # precedence over the MTL-derived defaults, matching how the sun elevation
+        # override already behaves.
         if cal_params:
             sun_elev = custom_sun_elev or cal_params["sun_elevation"]
             if cal_type in ("reflectance", "dos"):
-                mult = cal_params["reflectance_mult"].get(b_idx, 0.00002)
-                add = cal_params["reflectance_add"].get(b_idx, -0.10000)
+                default_mult = cal_params["reflectance_mult"].get(b_idx, 0.00002)
+                default_add = cal_params["reflectance_add"].get(b_idx, -0.10000)
             else:
-                mult = cal_params["radiance_mult"].get(b_idx, 1.0)
-                add = cal_params["radiance_add"].get(b_idx, 0.0)
+                default_mult = cal_params["radiance_mult"].get(b_idx, 1.0)
+                default_add = cal_params["radiance_add"].get(b_idx, 0.0)
         else:
             sun_elev = custom_sun_elev or 45.0
-            mult = custom_mult if custom_mult is not None else 1.0
-            add = custom_add if custom_add is not None else 0.0
+            default_mult = 1.0
+            default_add = 0.0
+
+        mult = custom_mult if custom_mult is not None else default_mult
+        add = custom_add if custom_add is not None else default_add
 
         if cal_type == "radiance":
             cal_b = calibrate_band_to_radiance(

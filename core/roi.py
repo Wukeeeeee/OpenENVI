@@ -132,18 +132,33 @@ class ROI:
 
         return mask
 
-    def calculate_statistics(self, raster_band: np.ndarray) -> Dict[str, float]:
+    @staticmethod
+    def _valid_mask(pixels: np.ndarray, nodata: Optional[float] = None) -> np.ndarray:
+        """Return a boolean mask of usable samples: finite and not the NoData sentinel.
+
+        ``isfinite`` alone is not enough because readers hand back the raw stored
+        values, which frequently include a finite NoData fill such as -9999.
+        """
+        valid = np.isfinite(pixels)
+        if nodata is not None and np.isfinite(nodata):
+            valid &= pixels != nodata
+        return valid
+
+    def calculate_statistics(
+        self, raster_band: np.ndarray, nodata: Optional[float] = None
+    ) -> Dict[str, float]:
         """Calculate statistical metrics for the ROI within a 2D band slice.
 
         Args:
             raster_band: 2D numpy array of shape (height, width).
+            nodata: Optional NoData sentinel to exclude from the statistics.
 
         Returns:
             Dictionary with count, min, max, mean, and std.
         """
         mask = self.get_mask(raster_band.shape[0], raster_band.shape[1])
         pixels = raster_band[mask]
-        valid_pixels = pixels[np.isfinite(pixels)]
+        valid_pixels = pixels[self._valid_mask(pixels, nodata)]
 
         if len(valid_pixels) == 0:
             return {
@@ -181,12 +196,14 @@ class ROI:
         if num_pixels == 0:
             return None
 
+        nodata = getattr(meta, "nodata", None)
+
         # Sample or accumulate across bands
         mean_spectrum = np.zeros(meta.bands, dtype=np.float32)
         for b in range(meta.bands):
             band_data = reader.read_band(b)
             valid = band_data[mask]
-            valid_finite = valid[np.isfinite(valid)]
+            valid_finite = valid[self._valid_mask(valid, nodata)]
             mean_spectrum[b] = float(np.mean(valid_finite)) if len(valid_finite) > 0 else 0.0
 
         return mean_spectrum

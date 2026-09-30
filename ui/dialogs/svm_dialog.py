@@ -118,6 +118,14 @@ class SVMWorker(QThread):
 
                 # Sample spectra for all pixels in this ROI: shape (N_pixels, bands)
                 roi_pixels = cube[:, ys, xs].T
+
+                # Drop NoData / non-finite spectra so they cannot bias the classifier
+                keep = roi._valid_mask(roi_pixels[:, 0], getattr(self.parent_meta, "nodata", None))
+                keep &= np.all(np.isfinite(roi_pixels), axis=1)
+                roi_pixels = roi_pixels[keep]
+                if len(roi_pixels) == 0:
+                    continue
+
                 training_data[idx] = roi_pixels
 
                 color_map[idx] = hex_to_rgb(roi.color)

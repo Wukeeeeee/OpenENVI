@@ -296,8 +296,10 @@ def maximum_likelihood_classification(
             import scipy.stats
             chi2_crit = float(scipy.stats.chi2.ppf(1.0 - probability_threshold, df=bands))
         except Exception:
-            # Asymptotic Wilson-Hilferty approximation if scipy not available
-            z = 1.96 if probability_threshold <= 0.05 else 1.64
+            # Asymptotic Wilson-Hilferty approximation if scipy is unavailable.
+            # chi2.ppf(1 - alpha) needs the ONE-SIDED normal quantile, i.e. 1.645 at
+            # alpha=0.05, not the two-sided 1.96.
+            z = 1.6449 if probability_threshold <= 0.05 else 1.2816
             chi2_crit = bands * ((1.0 - 2.0 / (9.0 * bands) + z * np.sqrt(2.0 / (9.0 * bands))) ** 3)
 
     # 2. Prediction in memory-efficient chunks

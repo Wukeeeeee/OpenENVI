@@ -499,6 +499,7 @@ class ROIToolDialog(QDialog):
 
         total_bands = self.layer.metadata.bands
         stats_list = []
+        nodata = getattr(self.layer.metadata, "nodata", None)
 
         try:
             for b in range(total_bands):
@@ -509,7 +510,7 @@ class ROIToolDialog(QDialog):
                 )
                 band_data = self.reader.read_band(b)
                 valid = band_data[mask]
-                valid = valid[np.isfinite(valid)]
+                valid = valid[roi._valid_mask(valid, nodata)]
                 if len(valid) > 0:
                     stats_list.append({
                         "band_name": b_name,

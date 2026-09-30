@@ -28,15 +28,19 @@ def compute_pca(
     num_components = min(num_components, bands)
     total_pixels = lines * samples
 
+    # Pixels containing NaN/Inf cannot contribute to the covariance estimate
+    finite_mask = np.all(np.isfinite(cube), axis=0)
+
     # For large datasets (> 500k pixels), compute covariance on spatial subsample
     if total_pixels > 500_000:
         step = max(1, int(np.sqrt(total_pixels / 250_000)))
         sub_cube = cube[:, ::step, ::step]
-        sub_flat = sub_cube.reshape(bands, -1).T.astype(np.float32)
+        sub_finite = np.all(np.isfinite(sub_cube), axis=0)
+        sub_flat = sub_cube.reshape(bands, -1).T.astype(np.float32)[sub_finite.reshape(-1)]
         mean_vec = np.mean(sub_flat, axis=0)
         cov = np.cov(sub_flat - mean_vec, rowvar=False)
     else:
-        flat_data = cube.reshape(bands, -1).T.astype(np.float32)
+        flat_data = cube.reshape(bands, -1).T.astype(np.float32)[finite_mask.reshape(-1)]
         mean_vec = np.mean(flat_data, axis=0)
         cov = np.cov(flat_data - mean_vec, rowvar=False)
 
@@ -87,41 +91,53 @@ def compute_mnf(
     total_pixels = lines * samples
 
     # 1. Estimate noise from spatial shift differences: Delta = X[:, :, 1:] - X[:, :, :-1]
+    #    Non-finite pixels are excluded from both the noise and signal estimates.
     if total_pixels > 500_000:
         step = max(1, int(np.sqrt(total_pixels / 250_000)))
         diff_h = cube[:, ::step, 1::step] - cube[:, ::step, :-1:step]
-        diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)
+        diff_ok = np.all(np.isfinite(diff_h), axis=0)
+        diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)[diff_ok.reshape(-1)]
         noise_cov = np.cov(diff_flat, rowvar=False) * 0.5
 
         data_sub = cube[:, ::step, ::step].reshape(bands, -1).T.astype(np.float32)
+        data_ok = np.all(np.isfinite(data_sub), axis=1)
+        data_sub = data_sub[data_ok]
         mean_vec = np.mean(data_sub, axis=0)
         total_cov = np.cov(data_sub - mean_vec, rowvar=False)
     else:
         diff_h = cube[:, :, 1:] - cube[:, :, :-1]
-        diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)
+        diff_ok = np.all(np.isfinite(diff_h), axis=0)
+        diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)[diff_ok.reshape(-1)]
         noise_cov = np.cov(diff_flat, rowvar=False) * 0.5
 
         data_flat = cube.reshape(bands, -1).T.astype(np.float32)
+        data_ok = np.all(np.isfinite(data_flat), axis=1)
+        data_flat = data_flat[data_ok]
         mean_vec = np.mean(data_flat, axis=0)
         total_cov = np.cov(data_flat - mean_vec, rowvar=False)
 
     # Regularize noise covariance for numerical stability
     noise_cov += np.eye(bands) * 1e-6
 
-    # 2. Solve generalized eigenvalue problem: total_cov * V = noise_cov * V * D
+    # 2. Whiten the noise, then run principal component decomposition on the whitened
+    #    signal. The Sigma_n^(-1/2) factor is essential: projecting with the eigenvectors
+    #    of Sigma_n^-1 * Sigma_s alone leaves the component noise at Sigma_n instead of
+    #    the identity, so the reported SNR values would not match the delivered
+    #    components.
     try:
-        inv_noise = np.linalg.pinv(noise_cov)
-        mat = np.dot(inv_noise, total_cov)
-        eigenvalues, eigenvectors = np.linalg.eig(mat)
+        W = np.linalg.pinv(np.linalg.cholesky(noise_cov)).T
+        whitened_cov = np.dot(W, np.dot(total_cov, W.T))
+        eigenvalues, whitening_evecs = np.linalg.eig(whitened_cov)
         # Take real parts
         eigenvalues = np.real(eigenvalues)
-        eigenvectors = np.real(eigenvectors)
+        whitening_evecs = np.real(whitening_evecs)
 
         idx = np.argsort(eigenvalues)[::-1]
         eigenvalues = eigenvalues[idx]
-        eigenvectors = eigenvectors[:, idx]
+        whitening_evecs = whitening_evecs[:, idx]
 
-        top_vectors = eigenvectors[:, :num_components]
+        # MNF transform matrix: M = Sigma_n^(-1/2) * V
+        top_vectors = np.dot(W, whitening_evecs[:, :num_components])
         mnf_cube = np.zeros((num_components, lines, samples), dtype=np.float32)
 
         for k in range(num_components):
@@ -132,7 +148,7 @@ def compute_mnf(
 
         return mnf_cube, eigenvalues[:num_components]
     except Exception:
-        # Fallback to standard PCA if generalized inversion encounters singularity
+        # Fallback to standard PCA if the noise covariance is not positive definite
         score_cube, eig, _ = compute_pca(cube, num_components=num_components)
         return score_cube, eig[:num_components]
 
@@ -316,13 +332,22 @@ def compute_ica(
     num_pixels = lines * samples
 
     flat_data = cube.reshape(bands, num_pixels).T.astype(np.float32)
+    finite_pixels = np.all(np.isfinite(flat_data), axis=1)
+
+    # FastICA rejects non-finite values, so fit and transform on the clean pixels
+    # and scatter any non-finite pixels back as NaN in the result.
+    clean_data = flat_data[finite_pixels]
+    if len(clean_data) < num_components + 1:
+        raise ValueError(
+            f"ICA requires at least {num_components + 1} valid pixels, found {len(clean_data)}."
+        )
 
     # Subsample for fast convergence on large images (>250k pixels)
-    if num_pixels > 250_000:
-        step = max(1, int(np.sqrt(num_pixels / 100_000)))
-        sub_data = cube[:, ::step, ::step].reshape(bands, -1).T.astype(np.float32)
+    if len(clean_data) > 250_000:
+        step = max(1, int(np.sqrt(len(clean_data) / 100_000)))
+        sub_data = clean_data[::step]
     else:
-        sub_data = flat_data
+        sub_data = clean_data
 
     ica = FastICA(
         n_components=num_components,
@@ -336,11 +361,12 @@ def compute_ica(
     ica.fit(sub_data)
 
     # Transform full raster in memory-safe chunks
-    transformed = np.empty((num_pixels, num_components), dtype=np.float32)
+    transformed = np.full((num_pixels, num_components), np.nan, dtype=np.float32)
     chunk_size = 100_000
-    for start in range(0, num_pixels, chunk_size):
-        end = min(start + chunk_size, num_pixels)
-        transformed[start:end] = ica.transform(flat_data[start:end])
+    for start in range(0, len(clean_data), chunk_size):
+        end = min(start + chunk_size, len(clean_data))
+        chunk = clean_data[start:end]
+        transformed[np.where(finite_pixels)[0][start:end]] = ica.transform(chunk)
 
     ica_cube = transformed.T.reshape(num_components, lines, samples).astype(np.float32)
     mixing_matrix = ica.mixing_ if hasattr(ica, "mixing_") else np.eye(bands, num_components)
