@@ -373,3 +373,209 @@ def compute_ica(
 
     return ica_cube, mixing_matrix
 
+
+
+def _vertex_unit_vectors(cube: np.ndarray, count: int, seed: int = 42) -> np.ndarray:
+    """Return `count` candidate search directions from extreme points of the data.
+
+    Each candidate is the data pixel that projects furthest along a random
+    direction, i.e. a vertex of the convex hull, projected to unit length. This is
+    where the SFF search is seeded: the iteration only refines a direction, so the
+    candidate decides which feature basin it falls into.
+    """
+    n_samples, bands = cube.shape
+    rng = np.random.default_rng(seed)
+    candidates: list = []
+    attempts = 0
+    while len(candidates) < count and attempts < count * 40:
+        attempts += 1
+        axis = rng.standard_normal(bands)
+        axis /= np.linalg.norm(axis)
+        # Extreme points are extremes of a linear functional, so the pixel that
+        # maximises the projection onto a random axis is a hull vertex.
+        u = cube[int(np.argmax(cube @ axis))]
+        norm = float(np.linalg.norm(u))
+        if norm < 1e-9:
+            continue
+        u = u / norm
+        if not any(float(np.dot(u, c)) > 0.999 for c in candidates):
+            candidates.append(u)
+    while len(candidates) < count:  # degenerate data: fall back to the mean direction
+        v = cube.mean(axis=0)
+        norm = float(np.linalg.norm(v))
+        candidates.append(v / norm if norm > 1e-9 else np.ones(bands))
+    return np.array(candidates)
+
+
+def spectral_feature_fitting(
+    cube: np.ndarray,
+    num_features: int = 0,
+    max_iterations: int = 60,
+    tolerance: float = 1e-6,
+    inlier_fraction: float = 0.15,
+    spectral_fraction: float = 0.02,
+    min_variance_fraction: float = 0.001,
+    max_samples: int = 20_000,
+    seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract endmember spectra with SFF (Spectral Feature Fitting).
+
+    Implements the iterative search of Boardman, Greenman & Feaman (1994). For a
+    candidate direction ``u`` the projection ``z_i = x_i . u`` is taken for every
+    pixel and the residual ``e_i = x_i - z_i u`` measured. The direction is then
+    updated to the normalised, projection-weighted mean of the spectra, where each
+    pixel is weighted by ``z_i / ||e_i||``, so the search converges on directions
+    with a small average residual -- which is the definition of an endmember. The
+    weighting is applied only to the best-fitting ``inlier_fraction`` of pixels,
+    which is what keeps each candidate inside its own basin; without it the update
+    degenerates into a global arg-min and every candidate collapses onto the same
+    dominant feature. Once a direction is accepted it is added to a growing basis
+    and the data are re-fitted against that whole basis, so successive features
+    describe structure the earlier ones did not already explain.
+
+    Args:
+        cube: 3D numpy array of shape (bands, lines, samples).
+        num_features: Number of endmembers to extract. Values <= 0 select the
+            count automatically from the numerical rank of the data covariance.
+        max_iterations: Maximum inner iterations per endmember.
+        tolerance: Convergence threshold on the direction update.
+        inlier_fraction: Fraction of best-fitting pixels each candidate direction
+            is refined over.
+        spectral_fraction: Fraction of best-fitting pixels averaged into the
+            returned endmember spectrum.
+        min_variance_fraction: Eigenvalues below this fraction of the leading
+            eigenvalue are treated as noise (dead or near-constant bands), so
+            auto-selection does not extract endmembers for them.
+        max_samples: Upper bound on the pixels used to drive the search. SFF
+            converges on the convex hull, so a large random subset gives the same
+            answer far faster than the full raster.
+        seed: Random seed for the candidate search directions.
+
+    Returns:
+        Tuple of (endmembers, rms_residuals):
+        - endmembers: np.ndarray of shape (num_endmembers, bands), the endmember
+          spectra in the same units as ``cube``
+        - rms_residuals: 1D array of the average normalised residual of the whole
+          scene against each endmember, measured before any deflation so the values
+          are comparable
+    """
+    bands = cube.shape[0]
+    flat = cube.reshape(bands, -1).T.astype(np.float64)
+    finite = np.all(np.isfinite(flat), axis=1)
+    data = flat[finite]
+
+    if len(data) < bands + 1:
+        raise ValueError("SFF requires more valid pixels than bands.")
+
+    # Subsample large scenes: the search follows the convex hull, which is
+    # already well described by a fraction of the pixels.
+    if len(data) > max_samples:
+        rng_sub = np.random.default_rng(seed)
+        sel = rng_sub.choice(len(data), max_samples, replace=False)
+        data = data[np.sort(sel)]
+
+    mean_vec = data.mean(axis=0)
+    centered = data - mean_vec
+
+    # Auto-select the feature count from the numerically significant eigenvalues
+    if num_features is None or num_features <= 0:
+        cov = np.cov(centered, rowvar=False)
+        eigvals = np.linalg.eigvalsh(cov)
+        # Ignore eigenvalues that are numerical noise or a negligible fraction of
+        # the leading one (dead bands, near-constant cirrus, heavy quantisation).
+        tol = max(
+            eigvals.max() * max(cov.shape) * np.finfo(np.float64).eps,
+            eigvals.max() * min_variance_fraction,
+        )
+        num_features = int(np.sum(eigvals > tol))
+    num_features = int(np.clip(num_features, 1, bands))
+
+    # SFF assumes non-negative spectra: an endmember is a ray from the origin that
+    # the data collapse onto, so negative reflectance is physical noise, not signal.
+    nonneg = np.maximum(data, 0.0)
+    working = nonneg.copy()
+    row_norms = np.maximum(np.linalg.norm(working, axis=1), 1e-12)
+    base_norms = row_norms.copy()
+
+    endmembers = np.zeros((num_features, bands), dtype=np.float64)
+    rms_residuals = np.zeros(num_features, dtype=np.float64)
+    found: list = []
+
+    for k in range(num_features):
+        best_u = None
+        best_residual = np.inf
+
+        # Try several starts and keep the one with the smallest average residual
+        for u in _vertex_unit_vectors(
+            working, count=min(12, max(2, num_features * 4)), seed=seed + k
+        ):
+            direction = u.copy()
+            for _ in range(max_iterations):
+                proj = working @ direction                      # (n,)
+                residual = working - np.outer(proj, direction)   # (n, bands)
+                lengths = np.linalg.norm(residual, axis=1)
+                # Refine only within the candidate's own basin. Weighting every
+                # pixel by z_i / ||e_i|| makes the update a global arg-min over the
+                # data, so all seeds collapse onto the same dominant feature no
+                # matter where they started. Restricting to the best-fitting
+                # fraction keeps each seed in the neighbourhood it was launched in.
+                rel = lengths / row_norms
+                inliers = rel <= np.quantile(rel, inlier_fraction)
+                w = np.where(inliers, np.clip(proj, 0.0, None) / np.maximum(lengths, 1e-12), 0.0)
+                total = w.sum()
+                if total <= 0:
+                    break
+                update = w @ working
+                norm = float(np.linalg.norm(update))
+                if norm < 1e-12:
+                    break
+                new_dir = update / norm
+                delta = float(np.linalg.norm(new_dir - direction))
+                direction = new_dir
+                if delta < tolerance:
+                    break
+
+            proj = np.clip(working @ direction, 0.0, None)
+            lengths = np.linalg.norm(working - np.outer(proj, direction), axis=1)
+            mean_residual = float(np.mean(lengths / row_norms)) if len(lengths) else np.inf
+            if mean_residual < best_residual:
+                best_residual = mean_residual
+                best_u = direction
+
+        if best_u is None:
+            best_u = np.ones(bands) / np.sqrt(bands)
+
+        endmembers[k] = best_u
+        found.append(best_u)
+
+        # Report the residual against the original scene, not the deflated copy, so
+        # the values are comparable between endmembers.
+        base_proj = np.clip(nonneg @ best_u, 0.0, None)
+        base_len = np.linalg.norm(nonneg - np.outer(base_proj, best_u), axis=1)
+        rms_residuals[k] = float(np.mean(base_len / base_norms))
+
+        # Deflate against every endmember found so far, jointly: re-fitting from the
+        # original data each round avoids the energy loss that repeated single-ray
+        # subtraction accumulates as pixels get clipped at zero.
+        basis = np.array(found, dtype=np.float64).T           # (bands, k + 1)
+        coef = np.linalg.lstsq(basis, nonneg.T, rcond=None)[0]
+        working = np.maximum(nonneg - coef.T @ basis.T, 0.0)
+        row_norms = np.maximum(np.linalg.norm(working, axis=1), 1e-12)
+
+    # The search yields unit-norm directions, which carry spectral shape but none of
+    # the reflectance scale a user needs to compare against ROIs or feed to a
+    # classifier. Turn each direction into a spectrum by averaging the pixels it
+    # best explains -- the ones with the smallest residual relative to their own
+    # length, which are the near-pure instances of that material. Selecting by
+    # projection magnitude instead would just return the brightest pixels, and for a
+    # direction concentrated on one band that is always the same material.
+    spectra = np.empty_like(endmembers)
+    for k, direction in enumerate(endmembers):
+        proj = np.clip(nonneg @ direction, 0.0, None)
+        rel = np.linalg.norm(nonneg - np.outer(proj, direction), axis=1) / base_norms
+        selected = nonneg[rel <= np.quantile(rel, spectral_fraction)]
+        if len(selected) == 0:
+            selected = nonneg[np.argsort(rel)[:1]]
+        spectra[k] = selected.mean(axis=0)
+
+    return spectra, rms_residuals

@@ -43,6 +43,7 @@ IMPLEMENTED_TOOLS = {
     "accuracy",
     # Spectral
     "sid",
+    "sff",
     "continuum",
     # Indices
     "ndvi",

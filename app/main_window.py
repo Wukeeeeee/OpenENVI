@@ -41,6 +41,7 @@ from ui.dialogs.resize_dialog import ResizeDataDialog
 from ui.dialogs.roi_dialog import ROIToolDialog
 from ui.dialogs.sam_dialog import SAMDialog
 from ui.dialogs.sid_dialog import SIDDialog
+from ui.dialogs.sff_dialog import SFFDialog
 from ui.dialogs.stacking_dialog import LayerStackingDialog
 from ui.dialogs.stats_dialog import QuickStatsDialog
 from ui.dialogs.svm_dialog import SVMDialog
@@ -788,6 +789,8 @@ class OpenENVIMainWindow(QMainWindow):
             self.show_sam_dialog()
         elif "sid" in tl or "divergence" in tl:
             self.show_sid_dialog()
+        elif "sff" in tl or "feature fitting" in tl:
+            self.show_sff_dialog()
         elif "maxlik" in tl or "maximum" in tl:
             self.show_maxlik_dialog()
         elif "svm" in tl or "support vector" in tl:
@@ -1103,6 +1106,19 @@ class OpenENVIMainWindow(QMainWindow):
             QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
             return
         dlg = ColorTransformDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_sff_dialog(self) -> None:
+        """Open Spectral Feature Fitting dialog for active layer."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = SFFDialog(
             layer=self._layers[self._active_layer_id],
             reader=self._readers[self._active_layer_id],
             parent=self,

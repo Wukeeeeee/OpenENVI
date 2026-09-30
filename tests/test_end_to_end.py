@@ -7,6 +7,7 @@ Band Math, Spectral Indices, PCA, Classification, and ROI statistics.
 
 import os
 import shutil
+import time
 import tempfile
 import numpy as np
 import pytest
@@ -470,4 +471,85 @@ def test_e2e_svm_sid_ica_dialogs(qapp, sample_dataset):
     for handler in ("show_svm_dialog", "show_sid_dialog", "show_ica_dialog"):
         assert callable(getattr(window, handler))
 
+    window.close()
+
+
+def test_e2e_sff_dialog(qapp, sample_dataset):
+    """Verify the SFF dialog builds, runs on real data and emits abundance layers."""
+    from core.algorithms.spectral import spectral_feature_fitting
+    from ui.dialogs.sff_dialog import SFFDialog, least_squares_abundances
+    from ui.toolbox import IMPLEMENTED_TOOLS
+
+    hdr_path, _, _ = sample_dataset
+    window = OpenENVIMainWindow()
+    layer = window.open_raster_file(hdr_path)
+    reader = window._readers[layer.layer_id]
+    bands = layer.metadata.bands
+    lines, samples = layer.metadata.height, layer.metadata.width
+
+    dlg = SFFDialog(layer, reader, parent=window)
+    # 0 means "choose the count automatically"
+    assert dlg.spin_num.value() == 0
+    assert dlg.spin_num.maximum() == bands
+    assert dlg.spin_num.specialValueText() != ""
+    assert dlg.chk_abundance.isChecked() is True
+    assert dlg.txt_out_name.text().endswith("_SFF_Abundance")
+
+    # The wavelength axis falls back to band indices when the file has none
+    axis = dlg._axis()
+    assert len(axis) == bands
+
+    captured = {}
+    dlg.endmembers_extracted.connect(
+        lambda name, ends, resid: captured.update(
+            name=name, ends=ends, residuals=resid
+        )
+    )
+
+    # Drive the dialog's own handler rather than the algorithm directly, so the
+    # worker, the cube transpose and the signal wiring are all exercised.
+    dlg.spin_num.setValue(3)
+    dlg.chk_abundance.setChecked(True)
+    dlg._start()
+    worker = dlg._worker
+    assert worker is not None
+    assert worker.wait(30000)
+    # wait() returns once run() is over, but the worker's signals cross threads as
+    # queued connections, so the main thread still has to drain them.
+    for _ in range(50):
+        QApplication.processEvents()
+        if "ends" in captured:
+            break
+        time.sleep(0.02)
+
+    assert "ends" in captured, captured
+    ends, residuals = captured["ends"], captured["residuals"]
+    assert ends.shape == (3, bands)
+    assert residuals.shape == (3,)
+    assert np.all(np.isfinite(ends))
+    assert ends.min() >= 0.0
+
+    # Abundances must reconstruct the scene on the extracted basis
+    cube = np.stack([reader.read_band(b) for b in range(bands)], axis=0)
+    abundance = least_squares_abundances(cube, ends)
+    assert abundance.shape == (3, lines, samples)
+    assert abundance.min() >= 0.0
+
+    # Rebuild the cube as the sum of abundance-weighted endmembers
+    pixels = abundance.transpose(1, 2, 0).reshape(-1, 3)
+    rebuilt = (pixels @ ends).reshape(lines, samples, bands).transpose(2, 0, 1)
+    finite = np.all(np.isfinite(cube), axis=0) & np.all(np.isfinite(rebuilt), axis=0)
+    assert finite.any()
+    residual = np.linalg.norm(cube - rebuilt, axis=0)[finite]
+    data_scale = np.linalg.norm(cube, axis=0)[finite]
+    assert np.mean(residual / np.maximum(data_scale, 1e-9)) < 0.5
+
+    # The same call with automatic count must not raise
+    auto_ends, _ = spectral_feature_fitting(cube, num_features=0)
+    assert len(auto_ends) >= 1
+
+    assert "sff" in IMPLEMENTED_TOOLS
+    assert callable(getattr(window, "show_sff_dialog"))
+
+    dlg.close()
     window.close()

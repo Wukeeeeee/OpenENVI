@@ -30,6 +30,7 @@ from core.algorithms.spectral import (
     compute_mnf,
     compute_pca,
     spectral_angle_mapper,
+    spectral_feature_fitting,
     spectral_information_divergence,
 )
 from core.algorithms.stretch import (
@@ -510,3 +511,134 @@ def test_roi_mean_spectrum_excludes_nodata():
     assert spectrum is not None
     # Band 0 is contaminated by NoData but must still average to 100
     np.testing.assert_allclose(spectrum, [100.0, 100.0], rtol=1e-5)
+
+
+def _planted_endmember_scene(num_bands: int = 30, n_pixels: int = 20000):
+    """Build a cube from four shaped endmember spectra with near-pure pixels.
+
+    Real land cover contains large near-pure regions, and endmember extraction
+    depends on it: with dense mixture abundances every pixel sits in the interior
+    of the simplex and none of them lies near any candidate ray.
+    """
+    wl = np.linspace(0.4, 2.4, num_bands)
+    truth = np.stack([
+        np.exp(-((wl - 1.4) ** 2) / 0.02) + 0.45 * np.exp(-((wl - 0.68) ** 2) / 0.004),
+        0.15 + 0.55 * (wl - 0.4) / 2.0 + 0.05 * np.cos(wl * 6),
+        0.04 + 0.10 * np.exp(-((wl - 0.44) ** 2) / 0.01) + 0.01 * wl,
+        0.30 * np.exp(-((wl - 0.9) ** 2) / 0.08),
+    ])
+    rng = np.random.default_rng(0)
+    labels = rng.choice(4, size=n_pixels, p=[0.35, 0.30, 0.20, 0.15])
+    abund = rng.dirichlet(np.ones(4), size=n_pixels) * 0.25
+    abund[np.arange(n_pixels), labels] += 0.75
+    flat = abund @ truth + 0.01 * np.abs(rng.standard_normal((n_pixels, num_bands)))
+    return flat.T.reshape(num_bands, 200, n_pixels // 200), truth
+
+
+def test_spectral_feature_fitting_recovers_planted_endmembers():
+    """SFF must return distinct, accurate endmember spectra, not one ray repeated."""
+    cube, truth = _planted_endmember_scene()
+    truth_n = truth / np.linalg.norm(truth, axis=1, keepdims=True)
+
+    ends, residuals = spectral_feature_fitting(cube, num_features=3)
+
+    assert ends.shape == (3, truth.shape[1])
+    assert residuals.shape == (3,)
+    # Reflectance-like spectra: non-negative and finite everywhere
+    assert np.all(np.isfinite(ends))
+    assert ends.min() >= 0.0
+
+    found_n = ends / np.linalg.norm(ends, axis=1, keepdims=True)
+    corr = found_n @ truth_n.T
+    matched = [int(np.argmax(c)) for c in corr]
+    # Three different planted endmembers, each matched well
+    assert len(set(matched)) == 3, matched
+    assert corr.max(axis=1).min() > 0.95, corr
+    # Recovered spectra must not collapse onto one another
+    assert (found_n @ found_n.T)[np.triu_indices(3, 1)].max() < 0.85
+
+
+def test_spectral_feature_fitting_is_deterministic():
+    """The same input and seed must produce the same endmembers."""
+    cube, _ = _planted_endmember_scene()
+    a, ra = spectral_feature_fitting(cube, num_features=3, seed=7)
+    b, rb = spectral_feature_fitting(cube, num_features=3, seed=7)
+    np.testing.assert_allclose(a, b)
+    np.testing.assert_allclose(ra, rb)
+
+
+def test_spectral_feature_fitting_auto_count_skips_dead_bands():
+    """Auto-selection must not spend endmembers on constant, information-free bands."""
+    cube, _ = _planted_endmember_scene()
+    dead = cube.copy()
+    dead[5] = 1.0    # constant band: zero variance, no endmember information
+    dead[11] = 2.5
+
+    ends, _ = spectral_feature_fitting(dead, num_features=0)
+
+    assert len(ends) >= 1
+    # A dead band is flat, so it can never carry a shaped endmember spectrum
+    for spectrum in ends:
+        assert spectrum.std() > 0.0
+
+
+def test_spectral_feature_fitting_ignores_nan_pixels():
+    """Non-finite pixels must be dropped rather than poison the covariance."""
+    cube, truth = _planted_endmember_scene()
+    truth_n = truth / np.linalg.norm(truth, axis=1, keepdims=True)
+
+    holed = cube.copy()
+    holed[:, :20, :20] = np.nan
+    holed[:, 5, 5] = np.inf
+
+    ends, _ = spectral_feature_fitting(holed, num_features=3)
+    found_n = ends / np.linalg.norm(ends, axis=1, keepdims=True)
+
+    assert np.all(np.isfinite(ends))
+    corr = found_n @ truth_n.T
+    assert len(set(int(np.argmax(c)) for c in corr)) == 3
+    assert corr.max(axis=1).min() > 0.95, corr
+
+
+def test_spectral_feature_fitting_respects_max_samples():
+    """max_samples bounds the search cost without changing the answer's character."""
+    cube, truth = _planted_endmember_scene()
+    truth_n = truth / np.linalg.norm(truth, axis=1, keepdims=True)
+
+    ends, _ = spectral_feature_fitting(cube, num_features=3, max_samples=3000)
+    found_n = ends / np.linalg.norm(ends, axis=1, keepdims=True)
+    corr = found_n @ truth_n.T
+
+    assert len(set(int(np.argmax(c)) for c in corr)) == 3
+    assert corr.max(axis=1).min() > 0.9, corr
+
+
+def test_spectral_feature_fitting_requires_enough_pixels():
+    """Too few valid pixels for a covariance must be reported, not silently fitted."""
+    cube = np.ones((6, 2, 2), dtype=np.float32)
+    with pytest.raises(ValueError):
+        spectral_feature_fitting(cube)
+
+
+def test_least_squares_abundances_recover_planted_abundances():
+    """Unmixing a scene on its own endmembers must reproduce the abundances."""
+    from ui.dialogs.sff_dialog import least_squares_abundances
+
+    wl = np.linspace(0.4, 2.4, 30)
+    ends = np.stack([
+        np.exp(-((wl - 1.4) ** 2) / 0.02) + 0.45 * np.exp(-((wl - 0.68) ** 2) / 0.004),
+        0.15 + 0.55 * (wl - 0.4) / 2.0 + 0.05 * np.cos(wl * 6),
+        0.30 * np.exp(-((wl - 0.9) ** 2) / 0.08),
+    ])
+    rng = np.random.default_rng(3)
+    abund = rng.dirichlet(np.ones(3), size=4000) * 0.5
+    abund[np.arange(4000), rng.integers(0, 3, 4000)] += 0.5
+    flat = abund @ ends
+    cube = flat.T.reshape(30, 40, 100)
+
+    recovered = least_squares_abundances(cube, ends)
+
+    assert recovered.shape == (3, 40, 100)
+    assert recovered.min() >= 0.0
+    got = recovered.reshape(3, -1).T
+    np.testing.assert_allclose(got, abund, atol=1e-6)

@@ -310,6 +310,25 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.sid.err_compute_msg": "Failed to complete SID classification:",
         "dialog.sid.status_done": "SID classification completed for {name}",
 
+        # Dialogs - Spectral Feature Fitting (SFF)
+        "sff.grp_endmembers": "Extracted Endmember Spectra",
+        "sff.grp_params": "Extraction Parameters",
+        "sff.hint": "Set the number of endmembers to 0 for automatic selection.",
+        "sff.lbl_num": "Number of endmembers:",
+        "sff.auto": "Automatic",
+        "sff.tip_num": "0 selects the count automatically from the significant eigenvalues of the data covariance.",
+        "sff.lbl_samples": "Maximum samples:",
+        "sff.tip_samples": "Upper bound on pixels driving the search. The search follows the convex hull, so a large random subset gives the same answer much faster.",
+        "sff.lbl_inlier": "Inlier fraction:",
+        "sff.tip_inlier": "Fraction of best-fitting pixels each candidate direction is refined over. Lower values keep each candidate in its own basin.",
+        "sff.chk_abundance": "Also build least-squares abundance images",
+        "sff.tip_abundance": "Unmix every pixel onto the extracted endmembers and add the result as a new layer.",
+        "sff.out_name": "Output name:",
+        "sff.legend_em": "Endmember",
+        "sff.status_done": "Extraction completed. Average residual per endmember:",
+        "sff.err_bands": "Spectral Feature Fitting needs at least two bands.",
+        "sff.err_failed": "Failed to complete Spectral Feature Fitting",
+
         # Dialogs - Support Vector Machine (SVM)
         "dialog.svm.title": "Support Vector Machine (SVM) Classification",
         "dialog.svm.grp_rois": "Training Classes (from ROIs)",
@@ -929,6 +948,25 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.sid.err_compute_title": "SID 分类错误",
         "dialog.sid.err_compute_msg": "完成光谱信息发散度分类失败:",
         "dialog.sid.status_done": "已完成 {name} 的 SID 分类",
+
+        # Dialogs - Spectral Feature Fitting (SFF)
+        "sff.grp_endmembers": "提取的端元波谱",
+        "sff.grp_params": "提取参数",
+        "sff.hint": "端元个数设为 0 表示自动确定。",
+        "sff.lbl_num": "端元数量：",
+        "sff.auto": "自动",
+        "sff.tip_num": "设为 0 时，根据数据协方差矩阵的有效特征值自动确定端元个数。",
+        "sff.lbl_samples": "最大采样数：",
+        "sff.tip_samples": "驱动搜索的像元上限。搜索沿凸包进行，因此大比例随机子集可得到相同结果且速度大幅提升。",
+        "sff.lbl_inlier": "内点比例：",
+        "sff.tip_inlier": "每个候选方向精化时所使用的最优拟合像元比例。该值越小，候选方向越不容易跳出各自的吸引域。",
+        "sff.chk_abundance": "同时生成最小二乘丰度影像",
+        "sff.tip_abundance": "将每个像元解混到提取的端元上，并将结果作为新图层加入。",
+        "sff.out_name": "输出名称：",
+        "sff.legend_em": "端元",
+        "sff.status_done": "提取完成。各端元的平均残差：",
+        "sff.err_bands": "光谱特征拟合至少需要两个波段。",
+        "sff.err_failed": "光谱特征拟合执行失败",
 
         # Dialogs - Support Vector Machine (SVM)
         "dialog.svm.title": "支持向量机监督分类 (SVM)",
