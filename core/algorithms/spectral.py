@@ -202,3 +202,148 @@ def spectral_angle_mapper(
     rule_images = angles.reshape(num_endmembers, lines, samples).astype(np.float32)
 
     return rule_images, class_map
+
+
+def spectral_information_divergence(
+    cube: np.ndarray,
+    reference_spectra: np.ndarray,
+    max_divergence: Optional[float] = None,
+    unclassified_val: int = -1,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Perform Spectral Information Divergence (SID) classification.
+
+    Computes the symmetric relative entropy (Kullback-Leibler divergence) between
+    probability distributions derived from pixel spectra and reference endmember spectra:
+        SID(p, q) = D(p || q) + D(q || p) = sum((p_i - q_i) * (ln(p_i) - ln(q_i)))
+
+    Args:
+        cube: 3D numpy array of shape (bands, lines, samples).
+        reference_spectra: 2D numpy array of shape (num_endmembers, bands).
+        max_divergence: Optional maximum divergence threshold. Pixels with divergence
+            greater than this value are set to unclassified_val.
+        unclassified_val: Value assigned to unclassified/invalid pixels (default -1).
+
+    Returns:
+        Tuple of (rule_images, classification_map):
+        - rule_images: 3D array of shape (num_endmembers, lines, samples) containing SID values.
+        - classification_map: 2D array of shape (lines, samples) with integer class indices.
+    """
+    bands, lines, samples = cube.shape
+    num_endmembers = reference_spectra.shape[0]
+
+    pixel_vectors = cube.reshape(bands, -1).astype(np.float64)  # (bands, N)
+    num_pixels = pixel_vectors.shape[1]
+
+    # Detect invalid (NaN, Inf, or all-zero / negative sum) pixels
+    invalid_mask = np.any(~np.isfinite(pixel_vectors), axis=0)
+
+    # Normalize reference spectra to probability vectors: sum(q) = 1
+    ref_pos = np.maximum(reference_spectra.astype(np.float64), 1e-8)
+    q = ref_pos / np.sum(ref_pos, axis=1, keepdims=True)  # (M, bands)
+    log_q = np.log(q)  # (M, bands)
+
+    # Normalize pixel spectra to probability vectors: sum(p) = 1
+    p_pos = np.maximum(pixel_vectors, 1e-8)
+    p_sum = np.sum(p_pos, axis=0, keepdims=True)  # (1, N)
+    p = p_pos / np.maximum(p_sum, 1e-8)  # (bands, N)
+    log_p = np.log(p)  # (bands, N)
+
+    # Compute symmetric divergence:
+    # SID(p, q) = sum_b (p_b - q_b) * (log(p_b) - log(q_b))
+    #           = sum_b [ p_b * log(p_b) - p_b * log(q_b) - q_b * log(p_b) + q_b * log(q_b) ]
+    #
+    # Term 1: p * log(p) sum over bands -> (1, N)
+    term1 = np.sum(p * log_p, axis=0, keepdims=True)  # (1, N)
+    # Term 2: q @ log(p) -> (M, N)
+    term2 = np.dot(q, log_p)  # (M, N)
+    # Term 3: log(q) @ p -> (M, N)
+    term3 = np.dot(log_q, p)  # (M, N)
+    # Term 4: q * log(q) sum over bands -> (M, 1)
+    term4 = np.sum(q * log_q, axis=1, keepdims=True)  # (M, 1)
+
+    # sid = term1 - term2 - term3 + term4  # (M, N)
+    sid = (term1 + term4) - (term2 + term3)
+    sid = np.maximum(sid, 0.0)  # clamp non-negative
+
+    class_indices = np.argmin(sid, axis=0).astype(np.int32)
+
+    if max_divergence is not None:
+        min_sid = np.min(sid, axis=0)
+        class_indices[min_sid > float(max_divergence)] = unclassified_val
+
+    if np.any(invalid_mask):
+        class_indices[invalid_mask] = unclassified_val
+        sid[:, invalid_mask] = np.nan
+
+    class_map = class_indices.reshape(lines, samples).astype(np.int32)
+    rule_images = sid.reshape(num_endmembers, lines, samples).astype(np.float32)
+
+    return rule_images, class_map
+
+
+def compute_ica(
+    cube: np.ndarray,
+    num_components: int = 3,
+    max_iter: int = 200,
+    tol: float = 1e-4,
+    algorithm: str = "parallel",
+    fun: str = "logcosh",
+    random_state: int = 42,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute Independent Component Analysis (ICA) using FastICA.
+
+    Separates mixed hyperspectral/multispectral signals into statistically
+    independent components for spectral unmixing and anomaly detection.
+
+    Args:
+        cube: 3D numpy array of shape (bands, lines, samples).
+        num_components: Number of independent components to extract.
+        max_iter: Maximum number of FastICA iterations.
+        tol: Convergence tolerance.
+        algorithm: FastICA algorithm ('parallel' or 'deflation').
+        fun: G-function form ('logcosh', 'exp', or 'cube').
+        random_state: Random state seed.
+
+    Returns:
+        Tuple of (ica_cube, mixing_matrix):
+        - ica_cube: np.ndarray of shape (num_components, lines, samples)
+        - mixing_matrix: estimated mixing matrix of shape (bands, num_components)
+    """
+    from sklearn.decomposition import FastICA
+
+    bands, lines, samples = cube.shape
+    num_components = min(num_components, bands)
+    num_pixels = lines * samples
+
+    flat_data = cube.reshape(bands, num_pixels).T.astype(np.float32)
+
+    # Subsample for fast convergence on large images (>250k pixels)
+    if num_pixels > 250_000:
+        step = max(1, int(np.sqrt(num_pixels / 100_000)))
+        sub_data = cube[:, ::step, ::step].reshape(bands, -1).T.astype(np.float32)
+    else:
+        sub_data = flat_data
+
+    ica = FastICA(
+        n_components=num_components,
+        algorithm=algorithm,
+        fun=fun,
+        max_iter=max_iter,
+        tol=tol,
+        random_state=random_state,
+        whiten="unit-variance",
+    )
+    ica.fit(sub_data)
+
+    # Transform full raster in memory-safe chunks
+    transformed = np.empty((num_pixels, num_components), dtype=np.float32)
+    chunk_size = 100_000
+    for start in range(0, num_pixels, chunk_size):
+        end = min(start + chunk_size, num_pixels)
+        transformed[start:end] = ica.transform(flat_data[start:end])
+
+    ica_cube = transformed.T.reshape(num_components, lines, samples).astype(np.float32)
+    mixing_matrix = ica.mixing_ if hasattr(ica, "mixing_") else np.eye(bands, num_components)
+
+    return ica_cube, mixing_matrix
+

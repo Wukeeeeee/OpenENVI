@@ -32,14 +32,17 @@ IMPLEMENTED_TOOLS = {
     "radiometry",
     "pca",
     "mnf",
+    "ica",
     "color",
     # Classification
     "kmeans",
     "isodata",
     "maxlik",
     "sam",
+    "svm",
     "accuracy",
     # Spectral
+    "sid",
     "continuum",
     # Indices
     "ndvi",

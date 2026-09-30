@@ -375,3 +375,99 @@ def test_e2e_synthetic_generator_dialog(qapp):
         if os.path.exists(f_p):
             os.remove(f_p)
 
+
+
+def test_e2e_svm_sid_ica_dialogs(qapp, sample_dataset):
+    """Verify the SVM, SID and ICA dialogs construct, populate and classify on real data."""
+    from core.algorithms.classification import svm_classification
+    from core.algorithms.spectral import compute_ica, spectral_information_divergence
+    from ui.dialogs.pca_dialog import PCADialog
+    from ui.dialogs.sid_dialog import SIDDialog
+    from ui.dialogs.svm_dialog import SVMDialog
+    from ui.toolbox import IMPLEMENTED_TOOLS
+
+    hdr_path, _, _ = sample_dataset
+    window = OpenENVIMainWindow()
+    layer = window.open_raster_file(hdr_path)
+    reader = window._readers[layer.layer_id]
+    bands = layer.metadata.bands
+    lines, samples = layer.metadata.height, layer.metadata.width
+
+    # Two spatially distinct training regions on the synthetic scene
+    roi_a = ROI(roi_id="roi_a", name="RegionA", bbox=(2, 2, 14, 14))
+    roi_b = ROI(roi_id="roi_b", name="RegionB", bbox=(18, 18, 30, 30))
+    layer.rois = [roi_a, roi_b]
+
+    assert int(np.sum(roi_a.get_mask(lines, samples))) > 0
+    assert int(np.sum(roi_b.get_mask(lines, samples))) > 0
+
+    # 1. SVM dialog builds its ROI table and enables Run for 2 classes
+    svm_dlg = SVMDialog(layer, reader, parent=window)
+    assert svm_dlg.table_rois.rowCount() == 2
+    assert svm_dlg.btn_run.isEnabled() is True
+    # Training-sample cap defaults to 2000/class, with "All" selectable
+    assert svm_dlg.spin_max_samples.value() == 2000
+
+    # Deselecting down to one class must disable Run (SVM needs >= 2 classes)
+    svm_dlg._deselect_all_rois()
+    assert svm_dlg.btn_run.isEnabled() is False
+    svm_dlg._select_all_rois()
+    assert svm_dlg.btn_run.isEnabled() is True
+
+    cube = np.stack([reader.read_band(b) for b in range(bands)], axis=0)
+
+    def roi_training_samples(roi):
+        mask = roi.get_mask(lines, samples)
+        ys, xs = np.where(mask)
+        return cube[:, ys, xs].T
+
+    class_map, probs = svm_classification(
+        cube=cube,
+        training_data={0: roi_training_samples(roi_a), 1: roi_training_samples(roi_b)},
+        kernel="rbf",
+        C=100.0,
+        gamma="scale",
+        probability_threshold=0.0,
+    )
+    assert class_map.shape == (lines, samples)
+    assert probs.shape == (2, lines, samples)
+    assert np.allclose(probs.sum(axis=0), 1.0, atol=1e-4)
+    svm_dlg.close()
+
+    # 2. SID dialog: reference spectra table plus divergence classification
+    sid_dlg = SIDDialog(layer, reader, parent=window)
+    assert sid_dlg.table_rois.rowCount() == 2
+    assert sid_dlg.btn_run.isEnabled() is True
+
+    refs = np.vstack([
+        roi_a.calculate_mean_spectrum(reader),
+        roi_b.calculate_mean_spectrum(reader),
+    ])
+    assert refs.shape == (2, bands)
+
+    rules, sid_map = spectral_information_divergence(cube=cube, reference_spectra=refs)
+    assert rules.shape == (2, lines, samples)
+    assert sid_map.shape == (lines, samples)
+    assert np.all(rules >= 0.0)
+    assert set(np.unique(sid_map)).issubset({0, 1, -1})
+    sid_dlg.close()
+
+    # 3. ICA dialog dispatches to the shared PCADialog in "ica" mode
+    ica_dlg = PCADialog(layer=layer, reader=reader, mode="ica", parent=window)
+    assert ica_dlg.mode == "ica"
+    assert ica_dlg.spin_components.maximum() == min(20, bands)
+    ica_dlg.close()
+
+    ic_cube, mixing = compute_ica(cube, num_components=3)
+    assert ic_cube.shape == (3, lines, samples)
+    assert mixing.shape == (bands, 3)
+    assert np.all(np.isfinite(ic_cube))
+
+    # 4. All three tools are registered as implemented in the toolbox
+    assert {"svm", "sid", "ica"}.issubset(IMPLEMENTED_TOOLS)
+
+    # 5. Main window exposes handlers for each menu action
+    for handler in ("show_svm_dialog", "show_sid_dialog", "show_ica_dialog"):
+        assert callable(getattr(window, handler))
+
+    window.close()

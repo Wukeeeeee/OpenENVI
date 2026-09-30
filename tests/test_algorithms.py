@@ -1,17 +1,21 @@
 """Tests for OpenENVI Algorithms, Spectral Analysis, and ROI Tools.
 
 Verifies stretch modes, spectral indices, Band Math AST evaluation,
-PCA, MNF, SAM, K-Means, ISODATA, and ROI metrics.
+PCA, MNF, ICA, SAM, SID, K-Means, ISODATA, SVM, and ROI metrics.
 """
+
+import warnings
 
 import numpy as np
 import pytest
+from sklearn.exceptions import ConvergenceWarning
 
 from core.algorithms.classification import (
     create_thematic_rgb,
     isodata_clustering,
     kmeans_clustering,
     maximum_likelihood_classification,
+    svm_classification,
 )
 from core.algorithms.indices import (
     calculate_evi,
@@ -22,9 +26,11 @@ from core.algorithms.indices import (
     evaluate_band_math,
 )
 from core.algorithms.spectral import (
+    compute_ica,
     compute_mnf,
     compute_pca,
     spectral_angle_mapper,
+    spectral_information_divergence,
 )
 from core.algorithms.stretch import (
     apply_stretch,
@@ -239,3 +245,186 @@ def test_maximum_likelihood_classification():
         cube, training_data, probability_threshold=0.01
     )
     assert class_map_thresh[0, 0] == -1
+
+
+def _two_class_cube(bands=4, lines=20, samples=20, seed=7):
+    """Build a noisy two-class cube: left half near [10,20,30,40], right near [80,70,60,50]."""
+    rng = np.random.default_rng(seed)
+    cube = np.zeros((bands, lines, samples), dtype=np.float32)
+    cube[:, :, : samples // 2] = np.array([10, 20, 30, 40], dtype=np.float32)[:, None, None]
+    cube[:, :, : samples // 2] += rng.normal(0, 0.5, (bands, lines, samples // 2)).astype(np.float32)
+    cube[:, :, samples // 2 :] = np.array([80, 70, 60, 50], dtype=np.float32)[:, None, None]
+    cube[:, :, samples // 2 :] += rng.normal(0, 0.5, (bands, lines, samples - samples // 2)).astype(np.float32)
+    return cube
+
+
+def test_svm_classification():
+    """Verify supervised SVM classification separates well-separated classes."""
+    cube = _two_class_cube()
+
+    training_data = {
+        0: cube[:, :5, :5].reshape(4, -1).T,
+        1: cube[:, :5, 15:].reshape(4, -1).T,
+    }
+
+    progress_calls = []
+    class_map, probs = svm_classification(
+        cube,
+        training_data,
+        kernel="rbf",
+        C=100.0,
+        gamma="scale",
+        probability_threshold=0.0,
+        progress_callback=lambda pct, msg: progress_calls.append((pct, msg)),
+    )
+
+    assert class_map.shape == (20, 20)
+    assert probs.shape == (2, 20, 20)
+
+    # Left half class 0, right half class 1, > 98% accuracy on both halves
+    assert (class_map[:, :10] == 0).sum() >= 195
+    assert (class_map[:, 10:] == 1).sum() >= 195
+
+    # Probabilities are proper distributions
+    assert np.allclose(probs.sum(axis=0), 1.0, atol=1e-4)
+
+    # Progress callback must reach 95 and be monotonically non-decreasing
+    assert progress_calls
+    assert progress_calls[-1][0] == 95
+    pcts = [p for p, _ in progress_calls]
+    assert pcts == sorted(pcts)
+
+
+def test_svm_classification_threshold_and_guards():
+    """Verify probability rejection, NaN handling, and single-class guard."""
+    cube = _two_class_cube()
+    training_data = {
+        0: cube[:, :5, :5].reshape(4, -1).T,
+        1: cube[:, :5, 15:].reshape(4, -1).T,
+    }
+
+    # NaN pixel must become unclassified and never raise
+    cube_nan = cube.copy()
+    cube_nan[:, 0, 0] = np.nan
+    class_map, _ = svm_classification(cube_nan, training_data, probability_threshold=0.0)
+    assert class_map[0, 0] == -1
+
+    # An aggressive probability threshold masks pixels as unclassified
+    strict_map, _ = svm_classification(cube_nan, training_data, probability_threshold=0.999999)
+    assert (strict_map == -1).sum() > 0
+
+    # A single training class is rejected
+    with pytest.raises(ValueError):
+        svm_classification(cube, {0: training_data[0]})
+
+
+def test_svm_classification_sample_cap():
+    """Verify the per-class training cap subsamples without changing the outcome shape."""
+    cube = _two_class_cube()
+
+    # Oversized class to exercise the cap: 200 pixels against a cap of 20
+    big_c0 = cube[:, :, :10].reshape(4, -1).T
+    assert len(big_c0) > 20
+    training_data = {0: big_c0, 1: cube[:, :5, 15:].reshape(4, -1).T}
+
+    capped_map, capped_probs = svm_classification(
+        cube, training_data, max_samples_per_class=20
+    )
+    full_map, full_probs = svm_classification(
+        cube, training_data, max_samples_per_class=0
+    )
+
+    assert capped_map.shape == full_map.shape == (20, 20)
+    assert capped_probs.shape == full_probs.shape
+
+    # Subsampling must preserve separability on well-separated classes
+    assert (capped_map[:, :10] == 0).sum() >= 195
+    assert (capped_map[:, 10:] == 1).sum() >= 195
+
+    # The two must agree on the overwhelming majority of pixels
+    assert (capped_map == full_map).mean() > 0.9
+
+
+def test_spectral_information_divergence():
+    """Verify SID assigns pixels to the nearest reference spectrum."""
+    cube = _two_class_cube()
+
+    refs = np.vstack([cube[:, 2, 2], cube[:, 2, 18]])
+    rules, class_map = spectral_information_divergence(cube, refs)
+
+    assert rules.shape == (2, 20, 20)
+    assert class_map.shape == (20, 20)
+
+    # Divergence is symmetric and non-negative
+    assert np.all(rules >= 0.0)
+
+    # Left half should be class 0, right half class 1
+    assert (class_map[:, :10] == 0).sum() >= 195
+    assert (class_map[:, 10:] == 1).sum() >= 195
+
+    # A pixel matching a reference spectrum exactly has ~zero divergence
+    rules_exact, class_map_exact = spectral_information_divergence(
+        cube[:, 2:3, 2:3], refs
+    )
+    assert float(np.min(rules_exact)) == pytest.approx(0.0, abs=1e-5)
+    assert class_map_exact[0, 0] == 0
+
+    # NaN pixels are masked as unclassified
+    cube_nan = cube.copy()
+    cube_nan[:, 0, 0] = np.nan
+    _, cmap_nan = spectral_information_divergence(cube_nan, refs)
+    assert cmap_nan[0, 0] == -1
+
+
+def test_spectral_information_divergence_threshold():
+    """Verify the maximum divergence threshold masks dissimilar pixels."""
+    cube = _two_class_cube()
+    refs = np.vstack([cube[:, 2, 2], cube[:, 2, 18]])
+
+    # SID normalizes spectra to probability vectors, so it is invariant to overall
+    # brightness. The noisy majority therefore has small-but-nonzero divergence.
+    _, strict_map = spectral_information_divergence(cube, refs, max_divergence=1e-6)
+    assert (strict_map == -1).sum() > 0.95 * strict_map.size
+
+    # A loose threshold keeps every pixel classified
+    _, loose_map = spectral_information_divergence(cube, refs, max_divergence=1e9)
+    assert not (loose_map == -1).any()
+
+
+def test_compute_ica():
+    """Verify FastICA separates two statistically independent mixed sources."""
+    rng = np.random.default_rng(3)
+    lines = samples = 30
+    num_pixels = lines * samples
+
+    # Two independent sources: one uniform, one strongly peaked (non-Gaussian)
+    src_a = rng.random(num_pixels).astype(np.float32)
+    src_b = rng.gamma(shape=0.6, scale=2.0, size=num_pixels).astype(np.float32)
+
+    # Mix them with a fixed 4x2 matrix so the cube has 4 bands and 2 components
+    mixing = np.array(
+        [[1.0, 0.5], [0.3, 1.2], [0.8, 0.2], [0.4, 0.9]], dtype=np.float32
+    )
+    mixed = (mixing @ np.vstack([src_a, src_b])).astype(np.float32)  # (4, num_pixels)
+    cube = mixed.reshape(4, lines, samples)
+
+    ica_cube, mixing_mat = compute_ica(cube, num_components=2, random_state=42)
+
+    assert ica_cube.shape == (2, lines, samples)
+    assert mixing_mat.shape == (4, 2)
+    assert np.all(np.isfinite(ica_cube))
+
+    # Each recovered component must be uncorrelated with the other
+    centered = ica_cube.reshape(2, -1).astype(np.float64)
+    centered -= centered.mean(axis=1, keepdims=True)
+    corr = np.corrcoef(centered)
+    assert abs(corr[0, 1]) < 0.2
+
+    # Requesting more components than bands is clamped to the band count. Decomposing
+    # a 4-band cube into all 4 components is a degenerate case for FastICA, which may
+    # emit a ConvergenceWarning; only the shape clamping is under test here.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConvergenceWarning)
+        clamped, clamped_mixing = compute_ica(cube, num_components=99)
+    assert clamped.shape[0] == 4
+    assert clamped_mixing.shape == (4, 4)

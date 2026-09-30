@@ -19,13 +19,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from core.algorithms.spectral import compute_mnf, compute_pca
+from core.algorithms.spectral import compute_ica, compute_mnf, compute_pca
 from core.i18n import tr
 from core.models import RasterLayer
 
 
 class PCADialog(QDialog):
-    """Dialog for computing Principal Component Analysis (PCA) or Minimum Noise Fraction (MNF)."""
+    """Dialog for computing PCA, MNF, or ICA transforms."""
 
     result_generated = Signal(str, np.ndarray, object)  # layer_name, array, parent_meta
 
@@ -33,10 +33,27 @@ class PCADialog(QDialog):
         super().__init__(parent)
         self.layer = layer
         self.reader = reader
-        self.mode = mode.lower()  # "pca" or "mnf"
+        self.mode = mode.lower()  # "pca", "mnf", or "ica"
 
-        is_mnf = self.mode == "mnf"
-        title = tr("dialog.mnf.title") if is_mnf else tr("dialog.pca.title")
+        if self.mode == "mnf":
+            title = tr("dialog.mnf.title")
+            num_lbl = tr("dialog.mnf.num_comp")
+            rgb_lbl = tr("dialog.mnf.chk_rgb")
+            tip = tr("dialog.mnf.report_tip")
+            run_lbl = tr("dialog.mnf.btn_run")
+        elif self.mode == "ica":
+            title = tr("dialog.ica.title")
+            num_lbl = tr("dialog.ica.num_comp")
+            rgb_lbl = tr("dialog.ica.chk_rgb")
+            tip = tr("dialog.ica.report_tip")
+            run_lbl = tr("dialog.ica.btn_run")
+        else:
+            title = tr("dialog.pca.title")
+            num_lbl = tr("dialog.pca.num_comp")
+            rgb_lbl = tr("dialog.pca.chk_rgb")
+            tip = tr("dialog.pca.report_tip")
+            run_lbl = tr("dialog.pca.btn_run")
+
         self.setWindowTitle(f"{title} - {layer.name}")
         self.resize(500, 420)
 
@@ -48,10 +65,8 @@ class PCADialog(QDialog):
         self.spin_components = QSpinBox()
         self.spin_components.setRange(1, min(20, layer.metadata.bands))
         self.spin_components.setValue(min(3, layer.metadata.bands))
-        num_lbl = tr("dialog.mnf.num_comp") if is_mnf else tr("dialog.pca.num_comp")
         form.addRow(num_lbl, self.spin_components)
 
-        rgb_lbl = tr("dialog.mnf.chk_rgb") if is_mnf else tr("dialog.pca.chk_rgb")
         self.chk_rgb = QCheckBox(rgb_lbl)
         self.chk_rgb.setChecked(True)
         form.addRow(self.chk_rgb)
@@ -60,13 +75,11 @@ class PCADialog(QDialog):
         # Report / Output summary
         self.txt_report = QTextEdit()
         self.txt_report.setReadOnly(True)
-        tip = tr("dialog.mnf.report_tip") if is_mnf else tr("dialog.pca.report_tip")
         self.txt_report.setPlaceholderText(tip)
         layout.addWidget(self.txt_report, stretch=1)
 
         # Buttons
         btn_box = QHBoxLayout()
-        run_lbl = tr("dialog.mnf.btn_run") if is_mnf else tr("dialog.pca.btn_run")
         self.btn_run = QPushButton(run_lbl)
         self.btn_run.setStyleSheet("background-color: #238636; color: white; font-weight: bold;")
         self.btn_run.clicked.connect(self._run_transform)
@@ -79,7 +92,7 @@ class PCADialog(QDialog):
         layout.addLayout(btn_box)
 
     def _run_transform(self) -> None:
-        """Execute PCA or MNF algorithm."""
+        """Execute PCA, MNF, or ICA algorithm."""
         num_comp = self.spin_components.value()
         try:
             self.btn_run.setEnabled(False)
@@ -109,10 +122,32 @@ class PCADialog(QDialog):
                 self.txt_report.setPlainText("\n".join(lines))
 
                 prefix = "MNF"
+
+            elif self.mode == "ica":
+                # ICA Transform
+                bands_data = [self.reader.read_band(b) for b in range(bands_count)]
+                cube = np.stack(bands_data, axis=0)
+                score_cube, mixing_mat = compute_ica(cube, num_components=num_comp)
+                del cube
+
+                # Build ICA Report
+                lines = [f"=== Independent Component Analysis (ICA) Report for {self.layer.name} ===", ""]
+                lines.append(f"Input Bands: {bands_count}")
+                lines.append(f"Output Independent Components: {num_comp}")
+                lines.append("-" * 50)
+                lines.append("Algorithm: FastICA (logcosh contrast, unit-variance whitening)")
+                lines.append(f"Mixing Matrix Shape: {mixing_mat.shape}")
+                lines.append("-" * 50)
+                for i in range(num_comp):
+                    comp_std = float(np.std(score_cube[i]))
+                    lines.append(f"IC {i + 1}: Std Dev = {comp_std:.4f}")
+                self.txt_report.setPlainText("\n".join(lines))
+
+                prefix = "IC"
+
             else:
                 # PCA Transform
                 if total_pixels > 500_000:
-                    # Fast sampled covariance on large satellite imagery (> 500k pixels)
                     step = max(1, int(np.sqrt(total_pixels / 250_000)))
                     sample_bands = [self.reader.read_band(b)[::step, ::step] for b in range(bands_count)]
                     sample_cube = np.stack(sample_bands, axis=0)
@@ -170,6 +205,14 @@ class PCADialog(QDialog):
             self.btn_run.setEnabled(False)
         except Exception as e:
             self.btn_run.setEnabled(True)
-            err_title = tr("dialog.mnf.err_title") if self.mode == "mnf" else tr("pca.err_title")
-            err_msg = tr("dialog.mnf.err_msg") if self.mode == "mnf" else tr("pca.err_msg")
+            if self.mode == "mnf":
+                err_title = tr("dialog.mnf.err_title")
+                err_msg = tr("dialog.mnf.err_msg")
+            elif self.mode == "ica":
+                err_title = tr("dialog.ica.err_title")
+                err_msg = tr("dialog.ica.err_msg")
+            else:
+                err_title = tr("pca.err_title")
+                err_msg = tr("pca.err_msg")
             QMessageBox.critical(self, err_title, f"{err_msg}\n{e}")
+

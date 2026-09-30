@@ -352,3 +352,135 @@ def maximum_likelihood_classification(
 
     return class_map, rule_distances
 
+
+def svm_classification(
+    cube: np.ndarray,
+    training_data: Dict[int, np.ndarray],
+    kernel: str = "rbf",
+    C: float = 100.0,
+    gamma: Union[str, float] = "scale",
+    degree: int = 3,
+    coef0: float = 0.0,
+    probability_threshold: float = 0.0,
+    max_samples_per_class: int = 2000,
+    progress_callback=None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Perform Supervised Support Vector Machine (SVM) classification.
+
+    Trains a multi-class Support Vector Classifier using training samples from ROIs,
+    and classifies multispectral/hyperspectral image cubes in memory-efficient chunks.
+
+    Args:
+        cube: 3D numpy array of shape (bands, lines, samples).
+        training_data: Dict mapping class index (0, 1, 2, ...) to 2D numpy array of
+            training spectra of shape (N_samples, bands).
+        kernel: SVM kernel type ('rbf', 'linear', 'poly', 'sigmoid').
+        C: Regularization penalty parameter.
+        gamma: Kernel coefficient for 'rbf', 'poly', and 'sigmoid'.
+        degree: Degree of the polynomial kernel function ('poly').
+        coef0: Independent term in kernel function for 'poly' and 'sigmoid'.
+        probability_threshold: Minimum probability threshold [0.0, 1.0]. Pixels with
+            maximum class probability below this threshold are marked as -1 (unclassified).
+        max_samples_per_class: Upper bound on training pixels subsampled per class. ROI
+            regions on full satellite scenes can hold hundreds of thousands of pixels, and
+            support-vector count (hence prediction cost) grows with it. Set to 0 or a
+            negative value to train on every pixel.
+        progress_callback: Optional callback receiving (percentage: int, message: str).
+
+    Returns:
+        Tuple of (class_map, rule_probabilities):
+        - class_map: 2D numpy array of shape (lines, samples) with predicted class indices or -1.
+        - rule_probabilities: 3D array of shape (num_classes, lines, samples) containing class probabilities.
+    """
+    from sklearn.svm import SVC
+
+    bands, lines, samples = cube.shape
+    num_pixels = lines * samples
+    class_indices = sorted(training_data.keys())
+    num_classes = len(class_indices)
+
+    if num_classes < 2:
+        raise ValueError("SVM Classification requires at least 2 training classes.")
+
+    # 1. Assemble training dataset
+    X_train_list = []
+    y_train_list = []
+    for c_idx in class_indices:
+        data_c = training_data[c_idx]
+        if len(data_c) < 1:
+            raise ValueError(f"Training class {c_idx} has 0 valid samples.")
+        if 0 < max_samples_per_class < len(data_c):
+            # Evenly strided subsample keeps the spectral spread of the ROI intact
+            step = len(data_c) / max_samples_per_class
+            picks = (np.arange(max_samples_per_class) * step).astype(np.int64)
+            data_c = data_c[picks]
+        X_train_list.append(data_c)
+        y_train_list.append(np.full(len(data_c), c_idx, dtype=np.int32))
+
+    X_train = np.vstack(X_train_list).astype(np.float64)
+    y_train = np.concatenate(y_train_list)
+
+    if progress_callback:
+        progress_callback(35, f"Training SVM model ({kernel.upper()} kernel, C={C})...")
+
+    # 2. Fit SVM model
+    clf = SVC(
+        C=float(C),
+        kernel=str(kernel),
+        degree=int(degree),
+        gamma=gamma if isinstance(gamma, str) else float(gamma),
+        coef0=float(coef0),
+        probability=True,
+        random_state=42,
+    )
+    clf.fit(X_train, y_train)
+
+    if progress_callback:
+        progress_callback(55, "Classifying image pixels...")
+
+    # 3. Predict in memory-safe chunks
+    flat_cube = cube.reshape(bands, num_pixels).T.astype(np.float64)
+    class_map_flat = np.full(num_pixels, -1, dtype=np.int32)
+    rule_probs_flat = np.zeros((num_classes, num_pixels), dtype=np.float32)
+
+    # Map classifier classes_ to indices in rule_probs_flat
+    clf_class_to_idx = {int(c): i for i, c in enumerate(clf.classes_)}
+
+    chunk_size = 50_000
+    total_chunks = (num_pixels + chunk_size - 1) // chunk_size
+
+    for chunk_i, start in enumerate(range(0, num_pixels, chunk_size)):
+        end = min(start + chunk_size, num_pixels)
+        X_chunk = flat_cube[start:end]
+        valid_mask = np.all(np.isfinite(X_chunk), axis=1)
+
+        if np.any(valid_mask):
+            X_valid = X_chunk[valid_mask]
+            probs_valid = clf.predict_proba(X_valid)  # shape: (n_valid, n_clf_classes)
+
+            # Map probabilities into rule_probs_flat
+            for clf_col, c_name in enumerate(clf.classes_):
+                target_row = class_indices.index(int(c_name))
+                rule_probs_flat[target_row, start:end][valid_mask] = probs_valid[:, clf_col].astype(np.float32)
+
+            # Determine winning class
+            max_prob_indices = np.argmax(probs_valid, axis=1)
+            predicted_labels = clf.classes_[max_prob_indices]
+            max_probs = np.max(probs_valid, axis=1)
+
+            if probability_threshold > 0.0:
+                unclass_mask = max_probs < probability_threshold
+                predicted_labels[unclass_mask] = -1
+
+            class_map_flat[start:end][valid_mask] = predicted_labels
+
+        if progress_callback:
+            pct = 55 + int(40 * (chunk_i + 1) / total_chunks)
+            progress_callback(pct, f"Classifying pixels ({chunk_i + 1}/{total_chunks})...")
+
+    class_map = class_map_flat.reshape(lines, samples)
+    rule_probabilities = rule_probs_flat.reshape(num_classes, lines, samples)
+
+    return class_map, rule_probabilities
+
+

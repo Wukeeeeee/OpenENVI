@@ -17,6 +17,12 @@ import core.proj_setup
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+# Preload scikit-learn (and the pandas/pyarrow native stack it may pull in) before
+# any Qt window exists. Importing these lazily from inside a live Qt application
+# triggers a native access violation while loading pyarrow's extension module.
+import sklearn.svm  # noqa: F401
+import sklearn.decomposition  # noqa: F401
+
 # Reset QSettings to clean state for test predictability
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication

@@ -40,8 +40,10 @@ from ui.dialogs.radiometry_dialog import RadiometryDialog
 from ui.dialogs.resize_dialog import ResizeDataDialog
 from ui.dialogs.roi_dialog import ROIToolDialog
 from ui.dialogs.sam_dialog import SAMDialog
+from ui.dialogs.sid_dialog import SIDDialog
 from ui.dialogs.stacking_dialog import LayerStackingDialog
 from ui.dialogs.stats_dialog import QuickStatsDialog
+from ui.dialogs.svm_dialog import SVMDialog
 from ui.dialogs.synthetic_dialog import SyntheticDataDialog
 from ui.layer_manager import LayerManagerDock
 from ui.main_view import MainViewWidget
@@ -187,14 +189,23 @@ class OpenENVIMainWindow(QMainWindow):
         self.act_mnf = QAction("Minimum Noise Fraction (MNF)...", self)
         self.act_mnf.triggered.connect(self.show_mnf_dialog)
 
+        self.act_ica = QAction("Independent Component Analysis (ICA)...", self)
+        self.act_ica.triggered.connect(self.show_ica_dialog)
+
         self.act_sam = QAction("Spectral Angle Mapper (SAM)...", self)
         self.act_sam.triggered.connect(self.show_sam_dialog)
+
+        self.act_sid = QAction("Spectral Information Divergence (SID)...", self)
+        self.act_sid.triggered.connect(self.show_sid_dialog)
 
         self.act_classification = QAction("Image Classification...", self)
         self.act_classification.triggered.connect(self.show_classification_dialog)
 
         self.act_maxlik = QAction("Maximum Likelihood Classification...", self)
         self.act_maxlik.triggered.connect(self.show_maxlik_dialog)
+
+        self.act_svm = QAction("Support Vector Machine (SVM) Classification...", self)
+        self.act_svm.triggered.connect(self.show_svm_dialog)
 
         self.act_roi = QAction("Region of Interest (ROI) Tool...", self)
         self.act_roi.triggered.connect(self.show_roi_dialog)
@@ -302,9 +313,12 @@ class OpenENVIMainWindow(QMainWindow):
         self.menu_tools.addAction(self.act_indices)
         self.menu_tools.addAction(self.act_pca)
         self.menu_tools.addAction(self.act_mnf)
+        self.menu_tools.addAction(self.act_ica)
         self.menu_tools.addAction(self.act_sam)
+        self.menu_tools.addAction(self.act_sid)
         self.menu_tools.addAction(self.act_classification)
         self.menu_tools.addAction(self.act_maxlik)
+        self.menu_tools.addAction(self.act_svm)
         self.menu_tools.addAction(self.act_pansharpen)
         self.menu_tools.addAction(self.act_radiometry)
         self.menu_tools.addAction(self.act_stats)
@@ -766,12 +780,18 @@ class OpenENVIMainWindow(QMainWindow):
             self.show_indices_dialog()
         elif "mnf" in tl:
             self.show_mnf_dialog()
+        elif "ica" in tl or "independent" in tl:
+            self.show_ica_dialog()
         elif "pca" in tl or "principal" in tl:
             self.show_pca_dialog()
         elif "sam" in tl:
             self.show_sam_dialog()
+        elif "sid" in tl or "divergence" in tl:
+            self.show_sid_dialog()
         elif "maxlik" in tl or "maximum" in tl:
             self.show_maxlik_dialog()
+        elif "svm" in tl or "support vector" in tl:
+            self.show_svm_dialog()
         elif any(k in tl for k in ("kmeans", "isodata", "classification")):
             self.show_classification_dialog()
         elif "roi" in tl or "region" in tl:
@@ -903,6 +923,20 @@ class OpenENVIMainWindow(QMainWindow):
         dlg.result_generated.connect(self.add_derived_layer)
         dlg.exec()
 
+    def show_ica_dialog(self) -> None:
+        """Open Independent Component Analysis (ICA) transform dialog."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = PCADialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            mode="ica",
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
     def show_sam_dialog(self) -> None:
         """Open Spectral Angle Mapper (SAM) supervised classification dialog."""
         if not self._active_layer_id:
@@ -941,6 +975,32 @@ class OpenENVIMainWindow(QMainWindow):
         )
         dlg.result_generated.connect(self.add_derived_layer)
         dlg.open_roi_tool_requested.connect(self.show_roi_dialog)
+        dlg.exec()
+
+    def show_sid_dialog(self) -> None:
+        """Open Spectral Information Divergence (SID) supervised classification dialog."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = SIDDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_svm_dialog(self) -> None:
+        """Open Support Vector Machine (SVM) supervised classification dialog."""
+        if not self._active_layer_id:
+            QMessageBox.information(self, tr("dialog.no_active_title"), tr("dialog.no_active_layer"))
+            return
+        dlg = SVMDialog(
+            layer=self._layers[self._active_layer_id],
+            reader=self._readers[self._active_layer_id],
+            parent=self,
+        )
+        dlg.result_generated.connect(self.add_derived_layer)
         dlg.exec()
 
     def show_roi_dialog(self, target_layer_id: Optional[str] = None) -> None:
