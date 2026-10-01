@@ -123,6 +123,12 @@ class ENVIRasterReader(BaseRasterReader):
 
         byte_order = int(self._raw_header.get("byte order", 0))
         endianness = "<" if byte_order == 0 else ">"
+        # The memmap must keep the file's byte order to read correctly, but the
+        # advertised dtype must not: rasterio rejects a byte-ordered string like
+        # '>i2' with "invalid dtype", so exporting a big-endian ENVI file failed
+        # outright, and matching on str(dtype) fell through to an astype that
+        # byte-swapped the data into a native-order GeoTIFF.
+        self._base_dtype = base_dtype
         self._dtype = base_dtype.newbyteorder(endianness)
 
         offset = int(self._raw_header.get("header offset", 0))
@@ -172,20 +178,45 @@ class ENVIRasterReader(BaseRasterReader):
             dy = self._map_info["dy"]
             west = easting - (tie_x - 1.0) * dx
             north = northing + (tie_y - 1.0) * dy
-            transform = rasterio.transform.from_origin(west, north, dx, dy)
+            # ENVI writes a negative y-scale for a north-referenced image, but
+            # from_origin() expects a positive pixel height and builds the Affine
+            # as Affine(dx, 0, west, 0, -ysize, north). Passing dy straight through
+            # flips the sign and registers the raster south-up, with row 0 at the
+            # bottom of the footprint.
+            transform = rasterio.transform.from_origin(west, north, dx, -dy)
 
         meta = RasterMetadata(
             width=self._samples,
             height=self._lines,
             bands=self._bands,
-            dtype=str(self._dtype),
+            dtype=str(self._base_dtype),
             crs=crs_str,
             transform=transform,
             interleave=self._interleave.upper(),
+            nodata=self._nodata_value(),
             band_details=band_details,
             raw_header=self._raw_header,
         )
         return meta
+
+    def _nodata_value(self) -> Optional[float]:
+        """The header's 'data ignore value', if it declares a usable one.
+
+        Without this every -9999 pixel reads as signal, which corrupts the
+        statistics, the display stretch, DOS-1 calibration and any mosaicking
+        that relies on nodata masking.
+        """
+        raw = self._raw_header.get("data ignore value")
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        # A zero sentinel would mask every genuinely black pixel.
+        if not np.isfinite(value) or value == 0.0:
+            return None
+        return value
 
     def _parse_band_details(self) -> List[BandInfo]:
         """Extract wavelength and band name information from header."""
@@ -334,9 +365,17 @@ class ENVIRasterReader(BaseRasterReader):
                 dx = self._map_info["dx"]
                 dy = self._map_info["dy"]
 
-                # Note: ENVI 1-based pixel tie-points
-                geo_x = easting + (x - (tie_x - 1.0)) * dx
-                geo_y = northing - (y - (tie_y - 1.0)) * dy
+                # Note: ENVI 1-based pixel tie-points, and a negative dy for a
+                # north-referenced image, so northing decreases as rows advance.
+                # The tie point names the pixel *corner*, while rasterio's xy(),
+                # GeoTIFFRasterReader and the transform-based fallback below all
+                # report the pixel *centre* -- and the status bar cursor reads
+                # through those. The half pixel and the tie offset both add here:
+                # the transform is built as f = northing + (tie_y - 1) * dy and
+                # then stepped per row, so subtracting (tie_y - 1) here instead
+                # would move every trimmed or subset scene by twice its tie offset.
+                geo_x = easting + (x - (tie_x - 1.0) + 0.5) * dx
+                geo_y = northing + ((tie_y - 1.0) + y + 0.5) * dy
                 return float(geo_x), float(geo_y)
             except Exception:
                 pass

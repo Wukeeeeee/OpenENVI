@@ -77,6 +77,11 @@ def stack_bands(
                 }.get(resampling_method.lower(), rasterio.warp.Resampling.nearest)
 
                 aligned = np.zeros((target_h, target_w), dtype=np.float32)
+                # Without src_nodata the warp pulls the source sentinel in as if
+                # it were data, so every output pixel within one source pixel of
+                # the scene edge picks up a dark halo from the fill value. mosaic.py
+                # already passes this.
+                src_nodata = reader.metadata.nodata
                 rasterio.warp.reproject(
                     source=data.astype(np.float32),
                     destination=aligned,
@@ -85,6 +90,7 @@ def stack_bands(
                     dst_transform=dst_trans,
                     dst_crs=dst_crs,
                     resampling=warp_resamp,
+                    src_nodata=src_nodata,
                     dst_nodata=ref_meta.nodata if ref_meta.nodata is not None else 0.0,
                 )
                 data = aligned

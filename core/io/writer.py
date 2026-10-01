@@ -63,7 +63,10 @@ def export_raster(
         raise ValueError("Cannot export raster with 0 bands specified.")
 
     total_bands = len(band_indices)
-    out_dtype = dtype or meta.dtype or "float32"
+    # A big-endian ENVI source advertises its byte order in the dtype string
+    # ('>i2'), which rasterio rejects outright as "invalid dtype". Drop the byte
+    # order so the export writes native-order data.
+    out_dtype = np.dtype(dtype or meta.dtype or "float32").newbyteorder("=").name
 
     # Normalize CRS
     crs_obj = None

@@ -273,7 +273,7 @@ def mosaic_rasters(
     band_details: List[BandInfo] = list(ref_meta.band_details or [])
     if len(band_details) != total_bands:
         band_details = [
-            BandInfo(index=i, name=f"Band {i + 1}", wavelength=None, mtl_band=i + 1)
+            BandInfo(index=i, name=f"Band {i + 1}", wavelength=None)
             for i in range(total_bands)
         ]
 

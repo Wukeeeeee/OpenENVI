@@ -127,6 +127,31 @@ def _safe_max(*args):
     return res
 
 
+def _cast_int(
+    x: np.ndarray,
+    dtype: type,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> np.ndarray:
+    """Cast to an integer type while keeping nodata as NaN.
+
+    A direct float-to-int cast leaves NaN undefined and NumPy resolves it to
+    INT_MIN instead of raising. np.clip does not help either: NaN is neither
+    below nor above a bound, so it passes straight through and the cast then
+    invents a value. Either way a nodata pixel silently becomes plausible data,
+    and under byte/uint it becomes a black pixel indistinguishable from a real 0.
+    """
+    arr = np.asanyarray(x, dtype=np.float64)
+    finite = np.isfinite(arr)
+    if lo is not None:
+        arr = np.where(finite, np.clip(arr, lo, hi), arr)
+    out = np.zeros(arr.shape, dtype=np.float64)
+    if finite.any():
+        with np.errstate(invalid="ignore"):
+            out[finite] = arr[finite].astype(dtype)
+    return np.where(finite, out, np.nan)
+
+
 _ALLOWED_FUNCS = {
     "exp": np.exp,
     "log": lambda x: np.log(np.maximum(x, 1e-7)),
@@ -158,11 +183,11 @@ _ALLOWED_FUNCS = {
     # ENVI / IDL type casting & conversion functions
     "float": lambda x: np.asanyarray(x, dtype=np.float32),
     "double": lambda x: np.asanyarray(x, dtype=np.float64),
-    "fix": lambda x: np.asanyarray(x, dtype=np.int32),
-    "int": lambda x: np.asanyarray(x, dtype=np.int32),
-    "long": lambda x: np.asanyarray(x, dtype=np.int32),
-    "byte": lambda x: np.clip(np.asanyarray(x), 0, 255).astype(np.uint8),
-    "uint": lambda x: np.clip(np.asanyarray(x), 0, 65535).astype(np.uint16),
+    "fix": lambda x: _cast_int(x, np.int32),
+    "int": lambda x: _cast_int(x, np.int32),
+    "long": lambda x: _cast_int(x, np.int32),
+    "byte": lambda x: _cast_int(x, np.uint8, 0, 255),
+    "uint": lambda x: _cast_int(x, np.uint16, 0, 65535),
 }
 
 

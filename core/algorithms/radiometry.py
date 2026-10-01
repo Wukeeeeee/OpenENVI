@@ -6,7 +6,6 @@ Surface Reflectance via Dark Object Subtraction (DOS-1).
 Specifically optimized for USGS Landsat 8/9 and Landsat 4/5/7 MTL metadata.
 """
 
-import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 
@@ -43,37 +42,44 @@ def extract_landsat_cal_params(
     rad_add = {}
 
     for idx, binfo in enumerate(band_details):
-        # Map band to its MTL band number. Order matters: more specific tokens must
-        # be tested first, because "red" is a substring of "infrared" and would
-        # otherwise capture NIR / SWIR / thermal bands.
-        b_num = None
-        name = binfo.name.lower()
-        if "coastal" in name:
-            b_num = 1
-        elif "blue" in name:
-            b_num = 2
-        elif "green" in name:
-            b_num = 3
-        elif "nir" in name or "near infrared" in name:
-            b_num = 5
-        elif "swir 1" in name or "shortwave infrared 1" in name or "swir1" in name:
-            b_num = 6
-        elif "swir 2" in name or "shortwave infrared 2" in name or "swir2" in name:
-            b_num = 7
-        elif "cirrus" in name:
-            b_num = 9
-        elif "tirs 1" in name or "thermal infrared 1" in name:
-            b_num = 10
-        elif "tirs 2" in name or "thermal infrared 2" in name:
-            b_num = 11
-        elif "pan" in name or "panchromatic" in name:
-            b_num = 8
-        elif "red" in name:
-            b_num = 4
-        else:
-            # Fall back on the band position, but only accept it when the metadata
-            # actually carries an MTL band number to read.
-            b_num = binfo.mtl_band if getattr(binfo, "mtl_band", None) else idx + 1
+        # Trust the reader's own MTL band number first. Landsat 4/5/7 number the
+        # same physical bands differently from Landsat 8/9 (NIR is B4 on L5 but
+        # B5 on L8), so a name-based table cannot serve both.
+        b_num = getattr(binfo, "mtl_band", None)
+
+        if b_num is None:
+            # Fallback for metadata that carries no MTL number. Only the Landsat
+            # 8/9 layout is assumed. Order matters: "red" is a substring of
+            # "infrared", so every infrared form has to be tested first.
+            name = binfo.name.lower()
+            if "coastal" in name:
+                b_num = 1
+            elif "blue" in name:
+                b_num = 2
+            elif "green" in name:
+                b_num = 3
+            elif "nir" in name or "near infrared" in name:
+                b_num = 5
+            elif "swir 1" in name or "shortwave infrared 1" in name or "swir1" in name:
+                b_num = 6
+            elif "swir 2" in name or "shortwave infrared 2" in name or "swir2" in name:
+                b_num = 7
+            elif "cirrus" in name:
+                b_num = 9
+            elif "tirs 1" in name or "thermal infrared 1" in name:
+                b_num = 10
+            elif "tirs 2" in name or "thermal infrared 2" in name:
+                b_num = 11
+            elif "pan" in name or "panchromatic" in name:
+                b_num = 8
+            elif "thermal" in name:
+                # A bare "Thermal Infrared" has no L8/9 equivalent; L8/9 TIRS
+                # bands are handled above.
+                b_num = 10
+            elif "red" in name:
+                b_num = 4
+            else:
+                b_num = idx + 1
 
         # Look up in rescaling dictionary
         rm = rescaling.get(f"REFLECTANCE_MULT_BAND_{b_num}")
@@ -102,14 +108,21 @@ def calibrate_band_to_reflectance(
     sun_elevation_deg: float,
     apply_dos: bool = False,
     dos_percentile: float = 1.0,
+    dos_seed: int = 42,
     nodata: float = 0.0,
 ) -> np.ndarray:
     """Convert raw DN band slice to TOA or DOS-corrected surface reflectance.
 
     Formula:
-        rho_prime = mult * DN + add
-        rho_toa = rho_prime / sin(sun_elevation)
+        rho_toa = mult * DN + add
         rho_surface = max(0, rho_toa - path_radiance)
+
+    ``mult`` and ``add`` are the MTL's REFLECTANCE_MULT_BAND_n /
+    REFLECTANCE_ADD_BAND_n coefficients, which per USGS already fold in the
+    1/sin(sun_elevation) factor. Dividing by sin again here double-corrected
+    the sun angle and inflated every reflectance by ~1/sin(theta) -- 1.57x on a
+    scene with the sun at 40 degrees. ``sun_elevation_deg`` is retained for the
+    record and for callers that report it; it does not rescale the result.
     """
     valid_mask = (band_data != nodata) & np.isfinite(band_data) & (band_data > 0)
     out = np.zeros_like(band_data, dtype=np.float32)
@@ -117,20 +130,20 @@ def calibrate_band_to_reflectance(
     if not np.any(valid_mask):
         return out
 
-    # Sun elevation angle in radians
-    sun_rad = math.radians(sun_elevation_deg) if sun_elevation_deg > 0 else math.pi / 2.0
-    sin_sun = max(0.01, math.sin(sun_rad))
-
     # Calculate TOA planetary reflectance
     dn_valid = band_data[valid_mask].astype(np.float32)
-    rho_toa = (mult * dn_valid + add) / sin_sun
+    rho_toa = mult * dn_valid + add
 
     # Dark Object Subtraction (DOS-1) for atmospheric haze correction
     if apply_dos:
         pos_refl = rho_toa[rho_toa > 0]
         if len(pos_refl) > 0:
             sample_count = min(len(pos_refl), 100000)
-            sample_pixels = np.random.choice(pos_refl, size=sample_count, replace=False)
+            # A dedicated generator: the global RNG is unseeded, so drawing from
+            # it made DOS-1 return a different path reflectance on every run
+            # over the same image.
+            rng = np.random.default_rng(dos_seed)
+            sample_pixels = rng.choice(pos_refl, size=sample_count, replace=False)
             path_refl = float(np.percentile(sample_pixels, dos_percentile))
             rho_toa = np.maximum(0.0, rho_toa - path_refl)
 

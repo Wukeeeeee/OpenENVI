@@ -8,6 +8,19 @@ from typing import Optional, Tuple
 import numpy as np
 
 
+def _covariance(data: np.ndarray) -> np.ndarray:
+    """Covariance of a (pixels, bands) array as a proper 2D matrix.
+
+    np.cov drops the band axis entirely for a single band and returns a 0-d
+    array, which np.linalg.eigh then rejects. A one-band cube is reachable from
+    the PCA, MNF and SFF dialogs, so the degenerate case has to stay 2D.
+    """
+    cov = np.cov(data, rowvar=False)
+    if cov.ndim == 0:
+        cov = cov.reshape(1, 1)
+    return np.atleast_2d(cov)
+
+
 def compute_pca(
     cube: np.ndarray,
     num_components: int = 3,
@@ -38,11 +51,11 @@ def compute_pca(
         sub_finite = np.all(np.isfinite(sub_cube), axis=0)
         sub_flat = sub_cube.reshape(bands, -1).T.astype(np.float32)[sub_finite.reshape(-1)]
         mean_vec = np.mean(sub_flat, axis=0)
-        cov = np.cov(sub_flat - mean_vec, rowvar=False)
+        cov = _covariance(sub_flat - mean_vec)
     else:
         flat_data = cube.reshape(bands, -1).T.astype(np.float32)[finite_mask.reshape(-1)]
         mean_vec = np.mean(flat_data, axis=0)
-        cov = np.cov(flat_data - mean_vec, rowvar=False)
+        cov = _covariance(flat_data - mean_vec)
 
     # Eigendecomposition on (bands, bands) covariance matrix
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
@@ -97,24 +110,24 @@ def compute_mnf(
         diff_h = cube[:, ::step, 1::step] - cube[:, ::step, :-1:step]
         diff_ok = np.all(np.isfinite(diff_h), axis=0)
         diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)[diff_ok.reshape(-1)]
-        noise_cov = np.cov(diff_flat, rowvar=False) * 0.5
+        noise_cov = _covariance(diff_flat) * 0.5
 
         data_sub = cube[:, ::step, ::step].reshape(bands, -1).T.astype(np.float32)
         data_ok = np.all(np.isfinite(data_sub), axis=1)
         data_sub = data_sub[data_ok]
         mean_vec = np.mean(data_sub, axis=0)
-        total_cov = np.cov(data_sub - mean_vec, rowvar=False)
+        total_cov = _covariance(data_sub - mean_vec)
     else:
         diff_h = cube[:, :, 1:] - cube[:, :, :-1]
         diff_ok = np.all(np.isfinite(diff_h), axis=0)
         diff_flat = diff_h.reshape(bands, -1).T.astype(np.float32)[diff_ok.reshape(-1)]
-        noise_cov = np.cov(diff_flat, rowvar=False) * 0.5
+        noise_cov = _covariance(diff_flat) * 0.5
 
         data_flat = cube.reshape(bands, -1).T.astype(np.float32)
         data_ok = np.all(np.isfinite(data_flat), axis=1)
         data_flat = data_flat[data_ok]
         mean_vec = np.mean(data_flat, axis=0)
-        total_cov = np.cov(data_flat - mean_vec, rowvar=False)
+        total_cov = _covariance(data_flat - mean_vec)
 
     # Regularize noise covariance for numerical stability
     noise_cov += np.eye(bands) * 1e-6
@@ -479,7 +492,7 @@ def spectral_feature_fitting(
 
     # Auto-select the feature count from the numerically significant eigenvalues
     if num_features is None or num_features <= 0:
-        cov = np.cov(centered, rowvar=False)
+        cov = _covariance(centered)
         eigvals = np.linalg.eigvalsh(cov)
         # Ignore eigenvalues that are numerical noise or a negligible fraction of
         # the leading one (dead bands, near-constant cirrus, heavy quantisation).

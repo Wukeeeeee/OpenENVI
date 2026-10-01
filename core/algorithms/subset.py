@@ -111,15 +111,27 @@ def resize_subset_raster(
         updated_header["samples"] = target_w
         updated_header["lines"] = target_h
         updated_header["bands"] = total_bands
+        # These per-band lists are optional in ENVI and are often shorter than
+        # "bands". Dropping the missing entries instead of substituting a
+        # placeholder shifted every later name down by one, so a 2-band subset
+        # of a scene with one name ended up naming band 1 after band 0 and
+        # leaving band 2 unnamed -- which then corrupted the spectral library
+        # axis and continuum removal, not just the display name.
         if "band names" in updated_header and isinstance(updated_header["band names"], list):
             orig_names = updated_header["band names"]
-            updated_header["band names"] = [orig_names[b] for b in selected_bands if b < len(orig_names)]
+            updated_header["band names"] = [
+                orig_names[b] if b < len(orig_names) else f"Band {b + 1}" for b in selected_bands
+            ]
         if "wavelength" in updated_header and isinstance(updated_header["wavelength"], list):
             orig_wl = updated_header["wavelength"]
-            updated_header["wavelength"] = [orig_wl[b] for b in selected_bands if b < len(orig_wl)]
+            updated_header["wavelength"] = [
+                orig_wl[b] if b < len(orig_wl) else 0.0 for b in selected_bands
+            ]
         if "fwhm" in updated_header and isinstance(updated_header["fwhm"], list):
             orig_fwhm = updated_header["fwhm"]
-            updated_header["fwhm"] = [orig_fwhm[b] for b in selected_bands if b < len(orig_fwhm)]
+            updated_header["fwhm"] = [
+                orig_fwhm[b] if b < len(orig_fwhm) else 0.0 for b in selected_bands
+            ]
 
     # Map default bands
     new_default_bands = None
