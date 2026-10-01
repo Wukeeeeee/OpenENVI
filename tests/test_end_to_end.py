@@ -717,3 +717,141 @@ def test_e2e_spectral_library_dialog(qapp, sample_dataset):
     assert callable(getattr(window, "show_spectral_library_dialog"))
 
     window.close()
+
+
+def test_e2e_classification_dialog_survives_nodata(qapp, sample_dataset):
+    """Drive the real Classification dialog on a scene containing NoData.
+
+    One masked pixel used to make a cluster centre NaN, which made every
+    distance against it NaN, which made argmin return 0 everywhere -- so the
+    entire scene came back as a single class. The dialog now has to deliver a
+    genuinely multi-class map with the masked region left unclassified, and the
+    thematic RGB it renders must agree with that class map.
+    """
+    from ui.dialogs.classification_dialog import ClassificationDialog
+
+    hdr_path, _, _ = sample_dataset
+    window = OpenENVIMainWindow()
+    layer = window.open_raster_file(hdr_path)
+    reader = window._readers[layer.layer_id]
+
+    # Poison a corner of the reader with NaN, the way a NoData scene arrives.
+    real_read_band = reader.read_band
+    masked = {}
+
+    def read_band(index):
+        data = np.array(real_read_band(index), dtype=np.float32, copy=True)
+        if index not in masked:
+            masked[index] = True
+            data[:6, :6] = np.nan
+        return data
+
+    reader.read_band = read_band
+
+    dlg = ClassificationDialog(layer, reader, parent=window)
+    captured = {}
+    dlg.result_generated.connect(
+        lambda name, cmap, meta, rgb: captured.update(
+            name=name, cmap=cmap, meta=meta, rgb=rgb
+        )
+    )
+    dlg.spin_classes.setValue(3)
+    dlg.spin_iters.setValue(6)
+    dlg.btn_run.click()
+
+    assert dlg._worker is not None
+    assert dlg._worker.wait(30000)
+    # wait() returns once run() is over, but the queued result signal still needs
+    # an event loop turn to reach the dialog.
+    for _ in range(100):
+        QApplication.processEvents()
+        time.sleep(0.02)
+        if "cmap" in captured:
+            break
+
+    assert "cmap" in captured, "the dialog never emitted a result"
+    class_map = captured["cmap"]
+    assert class_map.shape == (layer.metadata.height, layer.metadata.width)
+
+    labels = set(np.unique(class_map).tolist())
+    assert -1 in labels, "the masked corner must be reported as unclassified"
+    assert len(labels - {-1}) >= 2, f"the scene collapsed into {labels}"
+
+    # The masked corner is unclassified, and no valid pixel was dropped.
+    assert np.all(class_map[:6, :6] == -1)
+    assert np.all(class_map[6:, 6:] >= 0)
+
+    # The rendered thematic image must line up with the class map exactly.
+    rgb = captured["rgb"]
+    assert rgb.shape == (layer.metadata.height, layer.metadata.width, 3)
+    unclassified_rgb = rgb[0, 0]
+    valid_rgb = rgb[-1, -1]
+    assert not np.array_equal(unclassified_rgb, valid_rgb)
+
+    window.close()
+
+
+def test_e2e_radiometry_dialog_does_not_double_correct_the_sun_angle(qapp, sample_dataset):
+    """The MTL coefficients already fold in 1/sin(sun_elevation).
+
+    Dividing again inflated every band by 1/sin(theta) -- 1.41x at the dialog's
+    default 45 degrees -- so a calibrated layer never matched the product.
+    """
+    from ui.dialogs.radiometry_dialog import RadiometryDialog
+
+    hdr_path, _, _ = sample_dataset
+    window = OpenENVIMainWindow()
+    layer = window.open_raster_file(hdr_path)
+    reader = window._readers[layer.layer_id]
+
+    dn = 10000.0
+    reader = _ConstantDNReader(reader, dn)
+
+    dlg = RadiometryDialog(
+        available_layers={"L": (layer, reader)}, parent=window
+    )
+    dlg.spin_mult.setValue(2e-5)
+    dlg.spin_add.setValue(-0.1)
+    dlg.spin_sun.setValue(45.0)
+    dlg.rb_toa_refl.setChecked(True)
+    dlg.txt_name.setText("E2E_TOA")
+
+    captured = {}
+    dlg.result_generated.connect(
+        lambda name, result, meta: captured.update(name=name, result=result, meta=meta)
+    )
+    dlg._start_calibration()
+
+    assert dlg._worker is not None
+    assert dlg._worker.wait(30000)
+    for _ in range(100):
+        QApplication.processEvents()
+        time.sleep(0.02)
+        if "result" in captured:
+            break
+
+    assert "result" in captured, "the dialog never emitted a calibrated layer"
+    values = np.asarray(captured["result"])
+    valid = values[np.isfinite(values) & (values > 0)]
+
+    # mult * DN + add, with no further sun-angle division.
+    np.testing.assert_allclose(np.median(valid), dn * 2e-5 - 0.1, rtol=1e-4)
+    assert np.median(valid) < 0.2, "a 1/sin(45) division would roughly double this"
+
+    window.close()
+
+
+class _ConstantDNReader:
+    """Read-only wrapper returning a constant DN, ignoring the wrapped reader."""
+
+    def __init__(self, inner, dn):
+        self._inner = inner
+        self._dn = float(dn)
+
+    def read_band(self, index):
+        shape = (self._inner.metadata.height, self._inner.metadata.width)
+        return np.full(shape, self._dn, dtype=np.float32)
+
+    @property
+    def metadata(self):
+        return self._inner.metadata
