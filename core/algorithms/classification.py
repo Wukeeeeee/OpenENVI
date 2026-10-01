@@ -72,15 +72,30 @@ def kmeans_clustering(
     if flat_data.dtype != np.float32:
         flat_data = flat_data.astype(np.float32)
 
+    # A single NoData pixel is enough to poison the whole run: mean() over it
+    # yields a NaN centre, every distance against that centre is NaN, and
+    # np.argmin then returns 0 for all of them, collapsing the scene into one
+    # bogus class. Train and predict on finite pixels only, and leave the rest
+    # unclassified (-1), which is what create_thematic_rgb already renders as
+    # unclassified_color.
+    valid_mask = np.all(np.isfinite(flat_data), axis=1)
+    num_valid = int(np.count_nonzero(valid_mask))
+    if num_valid == 0:
+        empty = np.full(num_pixels, -1, dtype=np.int32).reshape(lines, samples)
+        return empty, np.zeros((num_classes, bands), dtype=np.float32)
+
     rng = np.random.default_rng(seed)
 
     # 1. Representative Subsampling for fast center training (prevents OOM on 50M+ pixel scenes)
-    sample_size = min(100_000, num_pixels)
-    if sample_size < num_pixels:
-        train_idx = rng.choice(num_pixels, size=sample_size, replace=False)
-        train_data = flat_data[train_idx]
+    sample_size = min(100_000, num_valid)
+    if sample_size < num_valid:
+        train_idx = rng.choice(num_valid, size=sample_size, replace=False)
+        train_data = flat_data[valid_mask][train_idx]
     else:
-        train_data = flat_data
+        train_data = flat_data[valid_mask]
+
+    # More clusters than usable pixels cannot be initialised without replacement.
+    num_classes = min(num_classes, train_data.shape[0])
 
     # Initialize centers by uniform sampling from train data
     init_indices = rng.choice(sample_size, size=num_classes, replace=False)
@@ -113,14 +128,16 @@ def kmeans_clustering(
     if progress_callback:
         progress_callback(70, "Predicting class assignments...")
 
-    labels = np.empty(num_pixels, dtype=np.int32)
+    labels = np.full(num_pixels, -1, dtype=np.int32)
     chunk_size = 250_000
-    total_chunks = (num_pixels + chunk_size - 1) // chunk_size
+    total_chunks = (num_valid + chunk_size - 1) // chunk_size
+    valid_data = flat_data[valid_mask]
+    valid_positions = np.flatnonzero(valid_mask)
 
-    for chunk_i, start in enumerate(range(0, num_pixels, chunk_size)):
-        end = min(start + chunk_size, num_pixels)
-        dist = _squared_distances(flat_data[start:end], centers)
-        labels[start:end] = np.argmin(dist, axis=1)
+    for chunk_i, start in enumerate(range(0, num_valid, chunk_size)):
+        end = min(start + chunk_size, num_valid)
+        dist = _squared_distances(valid_data[start:end], centers)
+        labels[valid_positions[start:end]] = np.argmin(dist, axis=1)
 
         if progress_callback and total_chunks > 1:
             pct = 70 + int(20 * (chunk_i + 1) / total_chunks)
@@ -156,6 +173,14 @@ def isodata_clustering(
     num_pixels = lines * samples
     data = cube.reshape(bands, num_pixels).T.astype(np.float32)
 
+    # Same finite-only rule as K-Means: unclassified (-1) pixels must not
+    # contribute a NaN mean when a cluster's membership is recomputed.
+    valid_mask = np.all(np.isfinite(data), axis=1)
+    num_valid = int(np.count_nonzero(valid_mask))
+    if num_valid == 0:
+        empty = np.full(num_pixels, -1, dtype=np.int32).reshape(lines, samples)
+        return empty, np.zeros((initial_classes, bands), dtype=np.float32)
+
     # Initialize using K-means
     class_map, centers = kmeans_clustering(cube, num_classes=initial_classes, max_iter=5, seed=seed)
     labels = class_map.flatten()
@@ -173,9 +198,12 @@ def isodata_clustering(
 
         centers = np.array(active_centers, dtype=np.float32)
 
-        # Re-assign labels
-        distances = _squared_distances(data, centers)
-        labels = np.argmin(distances, axis=1).astype(np.int32)
+        # Re-assign labels, leaving unclassified pixels alone
+        valid_data = data[valid_mask]
+        distances = _squared_distances(valid_data, centers)
+        new_labels = np.full(num_pixels, -1, dtype=np.int32)
+        new_labels[np.flatnonzero(valid_mask)] = np.argmin(distances, axis=1)
+        labels = new_labels
 
     return labels.reshape(lines, samples), centers
 
@@ -305,9 +333,17 @@ def maximum_likelihood_classification(
             chi2_crit = float(scipy.stats.chi2.ppf(1.0 - probability_threshold, df=bands))
         except Exception:
             # Asymptotic Wilson-Hilferty approximation if scipy is unavailable.
-            # chi2.ppf(1 - alpha) needs the ONE-SIDED normal quantile, i.e. 1.645 at
-            # alpha=0.05, not the two-sided 1.96.
-            z = 1.6449 if probability_threshold <= 0.05 else 1.2816
+            # chi2.ppf(1 - alpha) needs the ONE-SIDED normal quantile. Collapsing
+            # every alpha <= 0.05 onto 1.645 made the 1% case far too permissive,
+            # so pixels that should have stayed unclassified were assigned a class.
+            z = {0.01: 2.3263, 0.05: 1.6449, 0.10: 1.2816}.get(round(probability_threshold, 4))
+            if z is None:
+                # Interpolate the nearest tabulated quantile so an unusual alpha
+                # still lands between the two values around it.
+                table = sorted(((t, q) for t, q in
+                                ((0.01, 2.3263), (0.05, 1.6449), (0.10, 1.2816))
+                                if t <= probability_threshold), key=lambda kv: kv[0])
+                z = table[-1][1] if table else 1.2816
             chi2_crit = bands * ((1.0 - 2.0 / (9.0 * bands) + z * np.sqrt(2.0 / (9.0 * bands))) ** 3)
 
     # 2. Prediction in memory-efficient chunks

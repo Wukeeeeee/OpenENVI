@@ -6,7 +6,6 @@ Surface Reflectance via Dark Object Subtraction (DOS-1).
 Specifically optimized for USGS Landsat 8/9 and Landsat 4/5/7 MTL metadata.
 """
 
-import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 
@@ -115,9 +114,15 @@ def calibrate_band_to_reflectance(
     """Convert raw DN band slice to TOA or DOS-corrected surface reflectance.
 
     Formula:
-        rho_prime = mult * DN + add
-        rho_toa = rho_prime / sin(sun_elevation)
+        rho_toa = mult * DN + add
         rho_surface = max(0, rho_toa - path_radiance)
+
+    ``mult`` and ``add`` are the MTL's REFLECTANCE_MULT_BAND_n /
+    REFLECTANCE_ADD_BAND_n coefficients, which per USGS already fold in the
+    1/sin(sun_elevation) factor. Dividing by sin again here double-corrected
+    the sun angle and inflated every reflectance by ~1/sin(theta) -- 1.57x on a
+    scene with the sun at 40 degrees. ``sun_elevation_deg`` is retained for the
+    record and for callers that report it; it does not rescale the result.
     """
     valid_mask = (band_data != nodata) & np.isfinite(band_data) & (band_data > 0)
     out = np.zeros_like(band_data, dtype=np.float32)
@@ -125,13 +130,9 @@ def calibrate_band_to_reflectance(
     if not np.any(valid_mask):
         return out
 
-    # Sun elevation angle in radians
-    sun_rad = math.radians(sun_elevation_deg) if sun_elevation_deg > 0 else math.pi / 2.0
-    sin_sun = max(0.01, math.sin(sun_rad))
-
     # Calculate TOA planetary reflectance
     dn_valid = band_data[valid_mask].astype(np.float32)
-    rho_toa = (mult * dn_valid + add) / sin_sun
+    rho_toa = mult * dn_valid + add
 
     # Dark Object Subtraction (DOS-1) for atmospheric haze correction
     if apply_dos:

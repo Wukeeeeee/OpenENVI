@@ -14,17 +14,39 @@ from core.models import BandInfo, RasterMetadata
 class MemoryRasterReader(BaseRasterReader):
     """Raster reader wrapping an in-memory 2D or 3D NumPy array."""
 
-    def __init__(self, data: np.ndarray, name: str = "Memory Layer", parent_metadata: Optional[RasterMetadata] = None):
+    def __init__(
+        self,
+        data: np.ndarray,
+        name: str = "Memory Layer",
+        parent_metadata: Optional[RasterMetadata] = None,
+        layout: Optional[str] = None,
+    ):
+        """Wrap an in-memory raster.
+
+        Args:
+            data: 2D (lines, samples) or 3D array.
+            name: Layer name.
+            parent_metadata: Metadata of the source layer, used to resolve the
+                layout of a 3D array and to inherit CRS/transform/band names.
+            layout: One of ``"bhw"`` for (bands, lines, samples), ``"hwb"`` for
+                (lines, samples, bands), or ``None`` to infer it.
+        """
         super().__init__(file_path=f"memory://{name}")
         self._name = name
         self._parent_meta = parent_metadata
+
+        if layout not in (None, "bhw", "hwb"):
+            raise ValueError(f"Unsupported layout {layout!r}; expected 'bhw', 'hwb' or None.")
 
         if data.ndim == 2:
             # (H, W) -> (1, H, W)
             self._cube = data[np.newaxis, :, :].astype(np.float32)
         elif data.ndim == 3:
-            # Determine whether array is (H, W, bands) or (bands, H, W)
-            if self._parent_meta and data.shape[0] == self._parent_meta.height and data.shape[1] == self._parent_meta.width:
+            if layout == "hwb":
+                self._cube = np.transpose(data, (2, 0, 1)).astype(np.float32)
+            elif layout == "bhw":
+                self._cube = data.astype(np.float32)
+            elif self._parent_meta and data.shape[0] == self._parent_meta.height and data.shape[1] == self._parent_meta.width:
                 self._cube = np.transpose(data, (2, 0, 1)).astype(np.float32)
             elif self._parent_meta and data.shape[1] == self._parent_meta.height and data.shape[2] == self._parent_meta.width:
                 self._cube = data.astype(np.float32)
@@ -32,9 +54,16 @@ class MemoryRasterReader(BaseRasterReader):
                 self._cube = np.transpose(data, (2, 0, 1)).astype(np.float32)
             elif data.shape[0] < min(data.shape[1], data.shape[2]):
                 self._cube = data.astype(np.float32)
-            elif data.shape[-1] <= 100:
-                self._cube = np.transpose(data, (2, 0, 1)).astype(np.float32)
             else:
+                # Neither other axis is the smallest, so this cannot be read as a
+                # small-band (H, W, bands) image either -- treat it as
+                # (bands, H, W), which is what core/algorithms emits. The old
+                # "last axis <= 100 means bands" fallback used to sit here and
+                # inverted every small cube: an 8-band 4x5 chip was read as 5
+                # bands over an 8x4 image, silently changing both the band count
+                # and the geometry. A 3D array that really is (H, W, bands) with
+                # more bands than lines or samples is still ambiguous here; pass
+                # layout= explicitly, or parent_metadata, to settle it.
                 self._cube = data.astype(np.float32)
         else:
             raise ValueError(f"Unsupported array shape for MemoryRasterReader: {data.shape}")

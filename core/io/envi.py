@@ -123,6 +123,12 @@ class ENVIRasterReader(BaseRasterReader):
 
         byte_order = int(self._raw_header.get("byte order", 0))
         endianness = "<" if byte_order == 0 else ">"
+        # The memmap must keep the file's byte order to read correctly, but the
+        # advertised dtype must not: rasterio rejects a byte-ordered string like
+        # '>i2' with "invalid dtype", so exporting a big-endian ENVI file failed
+        # outright, and matching on str(dtype) fell through to an astype that
+        # byte-swapped the data into a native-order GeoTIFF.
+        self._base_dtype = base_dtype
         self._dtype = base_dtype.newbyteorder(endianness)
 
         offset = int(self._raw_header.get("header offset", 0))
@@ -183,7 +189,7 @@ class ENVIRasterReader(BaseRasterReader):
             width=self._samples,
             height=self._lines,
             bands=self._bands,
-            dtype=str(self._dtype),
+            dtype=str(self._base_dtype),
             crs=crs_str,
             transform=transform,
             interleave=self._interleave.upper(),
@@ -361,8 +367,15 @@ class ENVIRasterReader(BaseRasterReader):
 
                 # Note: ENVI 1-based pixel tie-points, and a negative dy for a
                 # north-referenced image, so northing decreases as rows advance.
-                geo_x = easting + (x - (tie_x - 1.0)) * dx
-                geo_y = northing + (y - (tie_y - 1.0)) * dy
+                # The tie point names the pixel *corner*, while rasterio's xy(),
+                # GeoTIFFRasterReader and the transform-based fallback below all
+                # report the pixel *centre* -- and the status bar cursor reads
+                # through those. The half pixel and the tie offset both add here:
+                # the transform is built as f = northing + (tie_y - 1) * dy and
+                # then stepped per row, so subtracting (tie_y - 1) here instead
+                # would move every trimmed or subset scene by twice its tie offset.
+                geo_x = easting + (x - (tie_x - 1.0) + 0.5) * dx
+                geo_y = northing + ((tie_y - 1.0) + y + 0.5) * dy
                 return float(geo_x), float(geo_y)
             except Exception:
                 pass

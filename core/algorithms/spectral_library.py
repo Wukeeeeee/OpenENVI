@@ -106,10 +106,6 @@ def _soil(base: float, features: Sequence[Tuple[float, float, float]], slope: fl
 # ------------------------------------------------------------------- the library
 
 
-def _green_vegetation() -> np.ndarray:
-    return _vegetation(red_edge=0.70, nir_level=0.52, dry=0.0)
-
-
 def _build_library() -> List[LibrarySpectrum]:
     """Construct every built-in reference spectrum."""
     entries: List[Tuple[str, str, np.ndarray]] = [

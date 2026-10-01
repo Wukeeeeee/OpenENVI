@@ -56,8 +56,13 @@ def calculate_band_statistics(
     std_val = float(np.std(valid_pixels))
 
     if min_val == max_val:
+        # A constant band has no spread to bin against. The edges still span
+        # [v-0.5, v+0.5], so the counts belong in the bin that actually contains
+        # v -- the middle one. Filing them under index 0 put the spike in a bin
+        # covering [99.5, 99.504) while 100 itself sat in bin 128, which put a
+        # saturated band's peak at the far left of any plot or stretch.
         hist_counts = np.zeros(bins, dtype=np.int64)
-        hist_counts[0] = len(valid_pixels)
+        hist_counts[bins // 2] = len(valid_pixels)
         bin_edges = np.linspace(min_val - 0.5, max_val + 0.5, bins + 1)
     else:
         hist_counts, bin_edges = np.histogram(valid_pixels, bins=bins, range=(min_val, max_val))

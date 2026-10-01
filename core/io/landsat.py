@@ -144,14 +144,23 @@ class LandsatMTLReader(BaseRasterReader):
         crs_str = self._ref_dataset.crs.to_string() if self._ref_dataset.crs else None
         transform_obj = self._ref_dataset.transform if self._ref_dataset.transform else None
 
-        # Build raw header dictionary containing calibration attributes
+        # Build raw header dictionary containing calibration attributes.
+        # A truncated or locale-formatted MTL makes float() raise on
+        # SUN_ELEVATION, and this runs after the GDAL handle is owned above --
+        # close() is never reached on that path, so the file stayed locked.
+        try:
+            sun_elevation = float(l1.get("IMAGE_ATTRIBUTES", {}).get("SUN_ELEVATION", 0.0) or 0.0)
+            earth_sun_distance = float(l1.get("IMAGE_ATTRIBUTES", {}).get("EARTH_SUN_DISTANCE", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            sun_elevation, earth_sun_distance = 0.0, 1.0
+
         raw_header = {
             "spacecraft": spacecraft,
             "sensor": prod.get("SENSOR_ID", ""),
             "date_acquired": prod.get("DATE_ACQUIRED", ""),
             "scene_center_time": prod.get("SCENE_CENTER_TIME", ""),
-            "sun_elevation": float(l1.get("IMAGE_ATTRIBUTES", {}).get("SUN_ELEVATION", 0.0) or 0.0),
-            "earth_sun_distance": float(l1.get("IMAGE_ATTRIBUTES", {}).get("EARTH_SUN_DISTANCE", 1.0) or 1.0),
+            "sun_elevation": sun_elevation,
+            "earth_sun_distance": earth_sun_distance,
             "mtl_data": self.mtl_data,
         }
 

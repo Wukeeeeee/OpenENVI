@@ -34,7 +34,24 @@ def resample_band_to_grid(
     zoom_y = target_height / float(in_h)
     zoom_x = target_width / float(in_w)
 
-    resampled = scipy.ndimage.zoom(band_data, (zoom_y, zoom_x), order=order)
+    # grid_mode=True aligns the output grid with the *pixel centres* of the input
+    # rather than with its outer edges. The default (grid_mode=False) shifts the
+    # result by half an input pixel, which for a 30 m Landsat band puts the
+    # resampled data 15 m off the panchromatic grid and skews every Brovey /
+    # Gram-Schmidt intensity ratio. It also applies no anti-aliasing when
+    # decimating, so a subset aliases instead of averaging.
+    #
+    # mode="nearest" clamps the output edge pixels to the input edge pixels. The
+    # alternative, grid-constant, pads with cval and lets the spline overshoot
+    # past the real range -- a 2x2 array of 10..40 came back with a 5.6 at the
+    # corner, i.e. darker than anything in the source.
+    resampled = scipy.ndimage.zoom(
+        band_data,
+        (zoom_y, zoom_x),
+        order=order,
+        grid_mode=True,
+        mode="nearest",
+    )
 
     # Ensure exact dimensions matching target grid
     curr_h, curr_w = resampled.shape[:2]

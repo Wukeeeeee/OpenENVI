@@ -13,9 +13,12 @@ from core.models import BandInfo, RasterMetadata
 
 
 def test_calibrate_band_to_reflectance():
-    """Test DN to TOA reflectance conversion with sun angle."""
-    # DN = 10000, mult = 2e-5, add = -0.1 -> rho_prime = 0.1
-    # sun_elevation = 30 deg -> sin(30) = 0.5 -> rho_toa = 0.2
+    """Test DN to TOA reflectance conversion.
+
+    The MTL coefficients already fold in 1/sin(sun_elevation), so the result is
+    exactly mult * DN + add and the sun angle does not rescale it.
+    """
+    # DN = 10000, mult = 2e-5, add = -0.1 -> rho_toa = 0.1
     raw_dn = np.full((10, 10), 10000.0, dtype=np.float32)
     refl = calibrate_band_to_reflectance(
         raw_dn,
@@ -25,7 +28,7 @@ def test_calibrate_band_to_reflectance():
         apply_dos=False,
     )
     assert refl.shape == (10, 10)
-    np.testing.assert_allclose(refl, 0.2, rtol=1e-4)
+    np.testing.assert_allclose(refl, 0.1, rtol=1e-4)
 
 
 def test_calibrate_band_to_reflectance_dos():
@@ -71,10 +74,10 @@ def test_execute_calibration_memory_reader():
 
     assert res.shape == (10, 10, 2)
     assert len(progress) == 2
-    # Band 1 -> 0.2
-    np.testing.assert_allclose(res[..., 0], 0.2, rtol=1e-4)
-    # Band 2: 15000 * 2e-5 - 0.1 = 0.2 -> / 0.5 = 0.4
-    np.testing.assert_allclose(res[..., 1], 0.4, rtol=1e-4)
+    # Band 1 -> 10000 * 2e-5 - 0.1 = 0.1
+    np.testing.assert_allclose(res[..., 0], 0.1, rtol=1e-4)
+    # Band 2 -> 15000 * 2e-5 - 0.1 = 0.2
+    np.testing.assert_allclose(res[..., 1], 0.2, rtol=1e-4)
 
 
 def test_landsat_band_resolution_prefers_specific_names_over_red():

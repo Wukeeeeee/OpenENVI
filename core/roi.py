@@ -198,12 +198,17 @@ class ROI:
 
         nodata = getattr(meta, "nodata", None)
 
-        # Sample or accumulate across bands
-        mean_spectrum = np.zeros(meta.bands, dtype=np.float32)
+        # Sample or accumulate across bands. A band with no valid pixel inside
+        # the ROI gets NaN, not 0.0: an ROI lying entirely on NoData for one band
+        # is common on a partly cloudy or pan-sharpened scene, and 0.0 is
+        # indistinguishable from a genuinely black mean, which silently poisons
+        # the ROI plot and every classifier fed from it.
+        mean_spectrum = np.full(meta.bands, np.nan, dtype=np.float32)
         for b in range(meta.bands):
             band_data = reader.read_band(b)
             valid = band_data[mask]
             valid_finite = valid[self._valid_mask(valid, nodata)]
-            mean_spectrum[b] = float(np.mean(valid_finite)) if len(valid_finite) > 0 else 0.0
+            if len(valid_finite) > 0:
+                mean_spectrum[b] = float(np.mean(valid_finite))
 
         return mean_spectrum

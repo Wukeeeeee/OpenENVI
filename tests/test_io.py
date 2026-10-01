@@ -51,11 +51,11 @@ def test_envi_bsq_io(temp_io_dir):
     assert prof.shape == (16,)
     np.testing.assert_allclose(prof, cube[:, 15, 10], rtol=1e-5)
 
-    # Test coordinate transformation
+    # Test coordinate transformation (pixel centre, matching the GeoTIFF reader)
     geo_x, geo_y = reader.pixel_to_geo(0, 0)
     assert geo_x is not None and geo_y is not None
-    assert geo_x == pytest.approx(500000.0)
-    assert geo_y == pytest.approx(3500000.0)
+    assert geo_x == pytest.approx(500005.0)
+    assert geo_y == pytest.approx(3499995.0)
 
     reader.close()
 
