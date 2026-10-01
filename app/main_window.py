@@ -42,6 +42,7 @@ from ui.dialogs.resize_dialog import ResizeDataDialog
 from ui.dialogs.roi_dialog import ROIToolDialog
 from ui.dialogs.sam_dialog import SAMDialog
 from ui.dialogs.sid_dialog import SIDDialog
+from ui.dialogs.spectral_library_dialog import SpectralLibraryDialog
 from ui.dialogs.sff_dialog import SFFDialog
 from ui.dialogs.stacking_dialog import LayerStackingDialog
 from ui.dialogs.stats_dialog import QuickStatsDialog
@@ -796,6 +797,8 @@ class OpenENVIMainWindow(QMainWindow):
             self.show_sid_dialog()
         elif "sff" in tl or "feature fitting" in tl:
             self.show_sff_dialog()
+        elif "spectral library" in tl or "library" in tl:
+            self.show_spectral_library_dialog()
         elif "maxlik" in tl or "maximum" in tl:
             self.show_maxlik_dialog()
         elif "svm" in tl or "support vector" in tl:
@@ -1141,6 +1144,15 @@ class OpenENVIMainWindow(QMainWindow):
             return
         dlg = MosaicDialog(layers, parent=self)
         dlg.result_generated.connect(self.add_derived_layer)
+        dlg.exec()
+
+    def show_spectral_library_dialog(self) -> None:
+        """Open the Spectral Library Viewer; browsing works without a layer."""
+        dlg = SpectralLibraryDialog(
+            layer=self._layers.get(self._active_layer_id),
+            reader=self._readers.get(self._active_layer_id),
+            parent=self,
+        )
         dlg.exec()
 
     def show_continuum_removal_dialog(self) -> None:

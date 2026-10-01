@@ -191,6 +191,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.btn_ok": "OK",
         "dialog.btn_cancel": "Cancel",
         "dialog.btn_apply": "Apply",
+        "dialog.btn_close": "Close",
 
         # Dialogs - Band Math
         "dialog.band_math.title": "Band Math",
@@ -363,6 +364,25 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "mosaic.err_no_inputs": "Please select at least one input raster.",
         "mosaic.err_bands": "All inputs must have the same band count; got {counts}.",
         "mosaic.err_failed": "Failed to complete mosaicking",
+
+        # Dialogs - Spectral Library
+        "spectral_lib.title": "Spectral Library Viewer",
+        "spectral_lib.all_categories": "All categories",
+        "spectral_lib.col_name": "Spectrum",
+        "spectral_lib.col_category": "Category",
+        "spectral_lib.col_peak": "Peak (nm)",
+        "spectral_lib.col_mean": "Mean",
+        "spectral_lib.col_angle": "Angle (deg)",
+        "spectral_lib.count": "Showing {n} of {total} reference spectra.",
+        "spectral_lib.grp_match": "Spectral Matching",
+        "spectral_lib.chk_scene": "Overlay the scene mean spectrum",
+        "spectral_lib.tip_scene": "Compute the mean spectrum of the active layer and plot it with the library curves.",
+        "spectral_lib.lbl_max_angle": "Maximum angle:",
+        "spectral_lib.tip_max_angle": "Only library spectra within this spectral angle of the scene are listed. Larger values return weaker matches.",
+        "spectral_lib.scene_curve": "Scene mean",
+        "spectral_lib.no_scene": "No active layer: browsing the library only.",
+        "spectral_lib.scene_error": "Cannot read the scene spectrum: {err}",
+        "spectral_lib.scene_info": "{name}: mean of {bands} bands over {pixels} valid pixels.",
 
         # Dialogs - Support Vector Machine (SVM)
         "dialog.svm.title": "Support Vector Machine (SVM) Classification",
@@ -866,6 +886,7 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "dialog.btn_ok": "确定",
         "dialog.btn_cancel": "取消",
         "dialog.btn_apply": "应用",
+        "dialog.btn_close": "关闭",
 
         # Dialogs - Band Math
         "dialog.band_math.title": "波段运算 (Band Math)",
@@ -1038,6 +1059,25 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "mosaic.err_no_inputs": "请至少选择一幅输入影像。",
         "mosaic.err_bands": "所有输入影像的波段数必须一致，当前为 {counts}。",
         "mosaic.err_failed": "影像拼接执行失败",
+
+        # 对话框 - 波谱库浏览查看器 (Spectral Library)
+        "spectral_lib.title": "波谱库浏览查看器",
+        "spectral_lib.all_categories": "全部分类",
+        "spectral_lib.col_name": "波谱名称",
+        "spectral_lib.col_category": "分类",
+        "spectral_lib.col_peak": "峰值波长 (nm)",
+        "spectral_lib.col_mean": "均值",
+        "spectral_lib.col_angle": "夹角 (度)",
+        "spectral_lib.count": "显示 {total} 条参考波谱中的 {n} 条。",
+        "spectral_lib.grp_match": "波谱匹配",
+        "spectral_lib.chk_scene": "叠加当前影像的平均波谱",
+        "spectral_lib.tip_scene": "计算当前图层的平均波谱，并与波谱库曲线一同绘制。",
+        "spectral_lib.lbl_max_angle": "最大夹角：",
+        "spectral_lib.tip_max_angle": "仅列出与影像夹角不超过该值的波谱。数值越大，匹配条件越宽松。",
+        "spectral_lib.scene_curve": "影像平均波谱",
+        "spectral_lib.no_scene": "当前没有活动图层，仅浏览波谱库。",
+        "spectral_lib.scene_error": "无法读取影像波谱：{err}",
+        "spectral_lib.scene_info": "{name}：{bands} 个波段、{pixels} 个有效像元的平均值。",
 
         # Dialogs - Support Vector Machine (SVM)
         "dialog.svm.title": "支持向量机监督分类 (SVM)",

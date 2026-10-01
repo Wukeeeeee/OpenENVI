@@ -639,3 +639,81 @@ def test_e2e_mosaic_dialog(qapp, sample_dataset):
     assert callable(getattr(window, "show_mosaic_dialog"))
 
     window.close()
+
+
+def test_e2e_spectral_library_dialog(qapp, sample_dataset):
+    """Verify the Spectral Library Viewer plots, filters and matches real data."""
+    from ui.dialogs.spectral_library_dialog import SpectralLibraryDialog
+    from ui.toolbox import IMPLEMENTED_TOOLS
+    from core.algorithms.spectral_library import get_spectral_library
+
+    hdr_path, _, _ = sample_dataset
+    window = OpenENVIMainWindow()
+    layer = window.open_raster_file(hdr_path)
+    reader = window._readers[layer.layer_id]
+
+    dlg = SpectralLibraryDialog(layer, reader, parent=window)
+
+    # 1. The browser lists the whole library, and the category combo filters it
+    total = len(get_spectral_library())
+    assert dlg.table_library.rowCount() == total
+    assert str(total) in dlg.lbl_library.text()
+
+    veg_index = dlg.cmb_category.findData("Vegetation")
+    assert veg_index > 0
+    dlg.cmb_category.setCurrentIndex(veg_index)
+    vegetation_rows = dlg.table_library.rowCount()
+    assert 0 < vegetation_rows < total
+    for row in range(vegetation_rows):
+        assert dlg.table_library.item(row, 1).text() == "Vegetation"
+    dlg.cmb_category.setCurrentIndex(0)
+    assert dlg.table_library.rowCount() == total
+
+    # 2. The scene spectrum is read and described in the status line
+    assert dlg._scene_curve is not None
+    wl, curve = dlg._scene_curve
+    assert wl.shape == (layer.metadata.bands,)
+    assert curve.shape == (layer.metadata.bands,)
+    assert np.all(np.isfinite(curve))
+    assert layer.name in dlg.lbl_scene.text()
+
+    # 3. The library is ranked against the scene by spectral angle, best first
+    assert dlg.table_matches.rowCount() > 0
+    angles = [
+        float(dlg.table_matches.item(r, 2).text())
+        for r in range(dlg.table_matches.rowCount())
+    ]
+    assert angles == sorted(angles)
+    assert angles[0] <= dlg.spin_max_angle.value()
+
+    # Tightening the threshold must not add matches
+    dlg.spin_max_angle.setValue(1.0)
+    tight = dlg.table_matches.rowCount()
+    assert tight <= dlg.table_matches.rowCount()
+    dlg.spin_max_angle.setValue(25.0)
+    assert dlg.table_matches.rowCount() >= tight
+
+    # 4. A redraw is a rebuild: the scene curve plus one curve per selection.
+    dlg.table_library.selectRow(0)
+    assert len(dlg.selected_spectra()) == 1
+    dlg._update_plot()
+    redrawn = len(dlg.plot_widget.listDataItems())
+    assert redrawn == 1 + len(dlg.selected_spectra())
+    dlg._update_plot()
+    assert len(dlg.plot_widget.listDataItems()) == redrawn, "redraw is not idempotent"
+
+    # The match table overlays its picked curve on top, without a redraw.
+    dlg.table_matches.selectRow(0)
+    dlg._show_match_curve()
+    assert len(dlg.plot_widget.listDataItems()) == redrawn + 1
+
+    # 5. Without a layer the viewer still browses, it just does not match
+    standalone = SpectralLibraryDialog(parent=window)
+    assert standalone._scene_curve is None
+    assert standalone.table_matches.rowCount() == 0
+    assert standalone.table_library.rowCount() == total
+
+    assert "spectral_lib" in IMPLEMENTED_TOOLS
+    assert callable(getattr(window, "show_spectral_library_dialog"))
+
+    window.close()

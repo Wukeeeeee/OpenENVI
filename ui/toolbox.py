@@ -45,6 +45,7 @@ IMPLEMENTED_TOOLS = {
     # Spectral
     "sid",
     "sff",
+    "spectral_lib",
     "continuum",
     # Indices
     "ndvi",

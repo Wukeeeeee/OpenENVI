@@ -847,3 +847,224 @@ def test_mosaic_accepts_gdal_cubic_spline_spelling():
     native, _ = mosaic_rasters([left, right], resample_method="cubic_spline")
 
     np.testing.assert_allclose(aliased, native)
+
+
+# ---------------------------------------------------------------------------
+# Spectral Library
+# ---------------------------------------------------------------------------
+
+
+def test_spectral_library_entries_are_well_formed():
+    """Every reference spectrum must sit on the shared grid and be usable."""
+    from core.algorithms.spectral_library import (
+        LIBRARY_WAVELENGTHS,
+        find_spectrum,
+        get_categories,
+        get_spectral_library,
+    )
+
+    entries = get_spectral_library()
+    assert len(entries) >= 15
+    assert len(get_categories()) >= 4
+
+    names = {e.name for e in entries}
+    assert len(names) == len(entries), "library contains duplicate names"
+
+    for entry in entries:
+        assert entry.reflectance.shape == LIBRARY_WAVELENGTHS.shape
+        assert np.all(np.isfinite(entry.reflectance))
+        assert entry.reflectance.min() >= 0.0
+        # A reflectance library is meaningless above 100 percent.
+        assert entry.reflectance.max() <= 1.0
+        assert entry.reflectance.mean() > 0.0
+        assert LIBRARY_WAVELENGTHS[0] <= entry.peak_wavelength <= LIBRARY_WAVELENGTHS[-1]
+
+    assert find_spectrum("Green Vegetation") is not None
+    assert find_spectrum("No Such Spectrum") is None
+
+
+def test_spectral_library_vegetation_shows_chlorophyll_and_red_edge():
+    """Green vegetation must have a red trough, a green peak and a NIR plateau."""
+    from core.algorithms.spectral_library import find_spectrum
+
+    veg = find_spectrum("Green Vegetation")
+    at = lambda w: float(np.interp(w, veg.wavelengths, veg.reflectance))
+
+    # Red absorption is the deepest point of the visible range.
+    assert at(650.0) < at(550.0)
+    # The red edge climbs steeply between 680 and 780 nm.
+    assert at(760.0) > at(690.0)
+    # Leaf water absorbs in the SWIR, below the NIR plateau.
+    assert at(1400.0) < 0.6 * at(1100.0)
+    assert at(1900.0) < 0.6 * at(1100.0)
+
+
+def test_spectral_library_water_absorbs_in_the_nir():
+    """Water must be near-zero beyond the visible, which is what makes it separable."""
+    from core.algorithms.spectral_library import find_spectrum
+
+    water = find_spectrum("Clear Water")
+    at = lambda w: float(np.interp(w, water.wavelengths, water.reflectance))
+
+    assert at(450.0) > 0.0
+    assert at(1200.0) < 0.01
+    assert at(1900.0) < 0.005
+    # Turbid water carries more energy into the NIR than clear water.
+    turbid = find_spectrum("Turbid Water")
+    assert float(np.interp(1000.0, turbid.wavelengths, turbid.reflectance)) > at(1000.0)
+
+
+def test_resample_spectrum_marks_out_of_range_as_nan():
+    """A narrow-band sensor must not be compared against wavelengths it never saw."""
+    from core.algorithms.spectral_library import resample_spectrum
+
+    wl = np.array([450.0, 550.0, 650.0])
+    vals = np.array([0.1, 0.3, 0.1])
+    targets = np.array([400.0, 500.0, 550.0, 800.0])
+
+    out = resample_spectrum(wl, vals, targets)
+
+    assert np.isnan(out[0]), "below range must be NaN"
+    assert np.isnan(out[3]), "above range must be NaN"
+    assert out[2] == pytest.approx(0.3)
+    # 500 nm is the midpoint of 450 and 550.
+    assert out[1] == pytest.approx(0.2)
+
+
+def test_mean_spectrum_ignores_invalid_pixels():
+    """NaN pixels must be excluded rather than poisoning the whole average."""
+    from core.algorithms.spectral_library import mean_spectrum
+
+    wl = np.array([400.0, 500.0, 600.0])
+    cube = np.full((3, 2, 2), 4.0, dtype=np.float32)
+    cube[:, 0, 1] = np.nan          # one dead pixel
+    cube[:, 1, :] = 6.0             # one brighter line
+
+    curve, count = mean_spectrum(cube, wl)
+
+    assert count == 3
+    assert curve.shape == (3,)
+    # The three survivors are 4, 6 and 6; the dead pixel contributes nothing.
+    assert curve[0] == pytest.approx(16.0 / 3.0)
+
+
+def test_mean_spectrum_validates_its_inputs():
+    """Wrong rank or a band/wavelength mismatch must be reported, not broadcast."""
+    from core.algorithms.spectral_library import mean_spectrum
+
+    with pytest.raises(ValueError, match="bands, lines, samples"):
+        mean_spectrum(np.ones((5, 5)), [400.0, 500.0])
+    with pytest.raises(ValueError, match="wavelengths"):
+        mean_spectrum(np.ones((3, 2, 2)), [400.0, 500.0])
+    with pytest.raises(ValueError, match="no valid pixels"):
+        mean_spectrum(np.full((3, 2, 2), np.nan), [400.0, 500.0, 600.0])
+
+
+def test_spectral_angle_is_scale_invariant():
+    """A pure brightness change must not change the spectral angle."""
+    from core.algorithms.spectral_library import spectral_angle_degrees
+
+    a = np.array([0.1, 0.3, 0.5, 0.2])
+    b = np.array([0.2, 0.6, 1.0, 0.4])
+
+    assert spectral_angle_degrees(a, a) == pytest.approx(0.0, abs=1e-6)
+    assert spectral_angle_degrees(a, b) == pytest.approx(0.0, abs=1e-6)
+    # A different shape, however faint, must register.
+    assert spectral_angle_degrees(a, np.array([0.5, 0.3, 0.1, 0.2])) > 30.0
+    # Identical curves still match where the other one has no data.
+    assert spectral_angle_degrees(
+        a, np.array([0.1, 0.3, 0.5, np.nan])
+    ) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_match_library_ranks_the_true_material_first():
+    """Feeding a library curve back in must return that same curve as the best match."""
+    from core.algorithms.spectral_library import get_spectral_library, match_library
+
+    for entry in get_spectral_library():
+        results = match_library(entry.wavelengths, entry.reflectance)
+        assert results, f"no match returned for {entry.name}"
+        best, angle = results[0]
+        assert best.name == entry.name
+        assert angle < 1e-3
+
+        angles = [a for _, a in results]
+        assert angles == sorted(angles), "results must come back ranked by angle"
+
+
+def test_match_library_filters_by_angle_and_category():
+    """The threshold and category filter must both actually remove entries."""
+    from core.algorithms.spectral_library import find_spectrum, match_library
+
+    grass = find_spectrum("Dry Grass")
+    strict = match_library(grass.wavelengths, grass.reflectance, max_angle=1.0)
+    assert len(strict) == 1
+    assert strict[0][0].name == "Dry Grass"
+
+    only_rock = match_library(
+        grass.wavelengths, grass.reflectance, max_angle=180.0, categories=["Rock"]
+    )
+    assert only_rock
+    assert all(entry.category == "Rock" for entry, _ in only_rock)
+
+
+def test_match_library_rejects_disjoint_range():
+    """A sensor band set outside the library range has nothing to match against."""
+    from core.algorithms.spectral_library import match_library
+
+    with pytest.raises(ValueError, match="does not overlap"):
+        match_library(
+            np.array([20000.0, 21000.0]),
+            np.array([0.1, 0.2]),
+        )
+
+
+def test_layer_wavelengths_falls_back_when_the_file_has_none():
+    """An image with no wavelength tags must still get a usable matching axis.
+
+    GeoTIFFs without a WAVELENGTH tag report None per band. Both that and a
+    malformed NaN have to fall back, or the whole library comparison silently
+    collapses onto a single axis point.
+    """
+    from core.io.memory import MemoryRasterReader
+    from core.algorithms.spectral_library import LIBRARY_WAVELENGTHS
+    from core.models import BandInfo, RasterMetadata
+    from ui.dialogs.spectral_library_dialog import layer_wavelengths
+
+    def reader_with(details):
+        meta = RasterMetadata(
+            width=4, height=4, bands=3, dtype="float32", crs=None, nodata=None,
+            band_details=details,
+        )
+        return MemoryRasterReader(
+            np.ones((4, 4, 3), np.float32), name="wl", parent_metadata=meta
+        )
+
+    # Real header wavelengths are used as-is.
+    real = reader_with([
+        BandInfo(index=0, name="B1", wavelength=460.0),
+        BandInfo(index=1, name="B2", wavelength=560.0),
+        BandInfo(index=2, name="B3", wavelength=660.0),
+    ])
+    np.testing.assert_allclose(layer_wavelengths(real, 3), [460.0, 560.0, 660.0])
+
+    # None (no tag) and NaN (bad tag) both fall back across the library range.
+    for bad in (None, float("nan")):
+        broken = reader_with([
+            BandInfo(index=0, name="B1", wavelength=bad),
+            BandInfo(index=1, name="B2", wavelength=bad),
+            BandInfo(index=2, name="B3", wavelength=bad),
+        ])
+        axis = layer_wavelengths(broken, 3)
+        assert np.all(np.isfinite(axis))
+        assert axis[0] == pytest.approx(LIBRARY_WAVELENGTHS[0])
+        assert axis[-1] == pytest.approx(LIBRARY_WAVELENGTHS[-1])
+        assert np.all(np.diff(axis) > 0)
+
+    # A partially populated header is not usable either: one bad band poisons the axis.
+    partial = reader_with([
+        BandInfo(index=0, name="B1", wavelength=460.0),
+        BandInfo(index=1, name="B2", wavelength=None),
+        BandInfo(index=2, name="B3", wavelength=660.0),
+    ])
+    assert np.all(np.isfinite(layer_wavelengths(partial, 3)))
