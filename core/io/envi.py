@@ -172,7 +172,12 @@ class ENVIRasterReader(BaseRasterReader):
             dy = self._map_info["dy"]
             west = easting - (tie_x - 1.0) * dx
             north = northing + (tie_y - 1.0) * dy
-            transform = rasterio.transform.from_origin(west, north, dx, dy)
+            # ENVI writes a negative y-scale for a north-referenced image, but
+            # from_origin() expects a positive pixel height and builds the Affine
+            # as Affine(dx, 0, west, 0, -ysize, north). Passing dy straight through
+            # flips the sign and registers the raster south-up, with row 0 at the
+            # bottom of the footprint.
+            transform = rasterio.transform.from_origin(west, north, dx, -dy)
 
         meta = RasterMetadata(
             width=self._samples,
@@ -182,10 +187,30 @@ class ENVIRasterReader(BaseRasterReader):
             crs=crs_str,
             transform=transform,
             interleave=self._interleave.upper(),
+            nodata=self._nodata_value(),
             band_details=band_details,
             raw_header=self._raw_header,
         )
         return meta
+
+    def _nodata_value(self) -> Optional[float]:
+        """The header's 'data ignore value', if it declares a usable one.
+
+        Without this every -9999 pixel reads as signal, which corrupts the
+        statistics, the display stretch, DOS-1 calibration and any mosaicking
+        that relies on nodata masking.
+        """
+        raw = self._raw_header.get("data ignore value")
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        # A zero sentinel would mask every genuinely black pixel.
+        if not np.isfinite(value) or value == 0.0:
+            return None
+        return value
 
     def _parse_band_details(self) -> List[BandInfo]:
         """Extract wavelength and band name information from header."""
@@ -334,9 +359,10 @@ class ENVIRasterReader(BaseRasterReader):
                 dx = self._map_info["dx"]
                 dy = self._map_info["dy"]
 
-                # Note: ENVI 1-based pixel tie-points
+                # Note: ENVI 1-based pixel tie-points, and a negative dy for a
+                # north-referenced image, so northing decreases as rows advance.
                 geo_x = easting + (x - (tie_x - 1.0)) * dx
-                geo_y = northing - (y - (tie_y - 1.0)) * dy
+                geo_y = northing + (y - (tie_y - 1.0)) * dy
                 return float(geo_x), float(geo_y)
             except Exception:
                 pass

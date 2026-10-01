@@ -23,6 +23,21 @@ DEFAULT_THEMATIC_PALETTE = [
 ]
 
 
+def _squared_distances(data: np.ndarray, centers: np.ndarray) -> np.ndarray:
+    """Squared distances from every row of ``data`` to every row of ``centers``.
+
+    The expansion |x|^2 - 2<x,c> + |c|^2 is evaluated in float64. In float32 an
+    uncalibrated raster sits around 1e4 DN, so each squared term is ~1e9 while
+    the gap separating two nearby classes is ~1e2 -- below float32's precision
+    at that magnitude, which lets argmin pick rounding noise.
+    """
+    a = np.asarray(data, dtype=np.float64)
+    c = np.asarray(centers, dtype=np.float64)
+    a_sq = np.sum(a * a, axis=1, keepdims=True)
+    c_sq = np.sum(c * c, axis=1, keepdims=True).T
+    return a_sq - 2.0 * (a @ c.T) + c_sq
+
+
 def kmeans_clustering(
     cube: np.ndarray,
     num_classes: int = 4,
@@ -77,9 +92,7 @@ def kmeans_clustering(
             pct = 30 + int(35 * (iteration + 1) / max_iter)
             progress_callback(pct, f"K-Means iteration {iteration + 1}/{max_iter}...")
 
-        train_sq = np.sum(train_data**2, axis=1, keepdims=True)
-        centers_sq = np.sum(centers**2, axis=1, keepdims=True).T
-        distances = train_sq - 2.0 * np.dot(train_data, centers.T) + centers_sq
+        distances = _squared_distances(train_data, centers)
         sub_labels = np.argmin(distances, axis=1)
 
         new_centers = np.zeros_like(centers)
@@ -101,15 +114,12 @@ def kmeans_clustering(
         progress_callback(70, "Predicting class assignments...")
 
     labels = np.empty(num_pixels, dtype=np.int32)
-    centers_sq = np.sum(centers**2, axis=1, keepdims=True).T
     chunk_size = 250_000
     total_chunks = (num_pixels + chunk_size - 1) // chunk_size
 
     for chunk_i, start in enumerate(range(0, num_pixels, chunk_size)):
         end = min(start + chunk_size, num_pixels)
-        chunk = flat_data[start:end]
-        chunk_sq = np.sum(chunk**2, axis=1, keepdims=True)
-        dist = chunk_sq - 2.0 * np.dot(chunk, centers.T) + centers_sq
+        dist = _squared_distances(flat_data[start:end], centers)
         labels[start:end] = np.argmin(dist, axis=1)
 
         if progress_callback and total_chunks > 1:
@@ -164,9 +174,7 @@ def isodata_clustering(
         centers = np.array(active_centers, dtype=np.float32)
 
         # Re-assign labels
-        data_sq = np.sum(data**2, axis=1, keepdims=True)
-        centers_sq = np.sum(centers**2, axis=1, keepdims=True).T
-        distances = data_sq - 2.0 * np.dot(data, centers.T) + centers_sq
+        distances = _squared_distances(data, centers)
         labels = np.argmin(distances, axis=1).astype(np.int32)
 
     return labels.reshape(lines, samples), centers
@@ -445,8 +453,9 @@ def svm_classification(
     class_map_flat = np.full(num_pixels, -1, dtype=np.int32)
     rule_probs_flat = np.zeros((num_classes, num_pixels), dtype=np.float32)
 
-    # Map classifier classes_ to indices in rule_probs_flat
-    clf_class_to_idx = {int(c): i for i, c in enumerate(clf.classes_)}
+    # Where each trained class lands in the rule-probability rows, so the
+    # per-chunk loop is a dict lookup instead of a linear scan per column.
+    row_of_class = {c: i for i, c in enumerate(class_indices)}
 
     chunk_size = 50_000
     total_chunks = (num_pixels + chunk_size - 1) // chunk_size
@@ -462,7 +471,7 @@ def svm_classification(
 
             # Map probabilities into rule_probs_flat
             for clf_col, c_name in enumerate(clf.classes_):
-                target_row = class_indices.index(int(c_name))
+                target_row = row_of_class[int(c_name)]
                 rule_probs_flat[target_row, start:end][valid_mask] = probs_valid[:, clf_col].astype(np.float32)
 
             # Determine winning class

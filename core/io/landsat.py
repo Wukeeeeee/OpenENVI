@@ -121,12 +121,16 @@ class LandsatMTLReader(BaseRasterReader):
 
             band_idx = len(self._band_paths)
             self._band_paths.append(full_path)
+            # The numeric suffix of FILE_NAME_BAND_n is the MTL band number, which
+            # is exactly what REFLECTANCE_MULT_BAND_n in the metadata is keyed on.
+            mtl_band = int(mtl_key.rsplit("_", 1)[-1])
             discovered_bands.append(
                 BandInfo(
                     index=band_idx,
                     name=default_name,
                     wavelength=wavelength,
                     wavelength_unit="nm",
+                    mtl_band=mtl_band,
                 )
             )
 

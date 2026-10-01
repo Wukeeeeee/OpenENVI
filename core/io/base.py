@@ -39,6 +39,11 @@ class BaseRasterReader(ABC):
 
         Returns:
             2D numpy array of shape (height, width).
+
+        Note:
+            The result may be a read-only view onto a memory-mapped file. The
+            ENVI reader relies on this to avoid duplicating a band that can be
+            200 MB, so copy before writing in place.
         """
         pass
 

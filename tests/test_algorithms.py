@@ -1068,3 +1068,308 @@ def test_layer_wavelengths_falls_back_when_the_file_has_none():
         BandInfo(index=2, name="B3", wavelength=660.0),
     ])
     assert np.all(np.isfinite(layer_wavelengths(partial, 3)))
+
+
+# ---------------------------------------------------------------------------
+# Regressions: ENVI georeferencing, nodata propagation and numeric robustness
+# ---------------------------------------------------------------------------
+
+
+def _write_envi_header(tmp_path, name="t", extra=""):
+    """Write a minimal, standards-conforming ENVI dataset and return its path.
+
+    The map info uses a NEGATIVE y-scale, which is what real ENVI emits for a
+    north-referenced image.
+    """
+    import os
+
+    lines, samples, bands = 6, 5, 2
+    data = np.arange(bands * lines * samples, dtype=np.int16)
+    data.tofile(os.path.join(tmp_path, f"{name}.dat"))
+    hdr = (
+        "ENVI\n"
+        f"samples = {samples}\n"
+        f"lines = {lines}\n"
+        f"bands = {bands}\n"
+        "header offset = 0\n"
+        "file type = ENVI Standard\n"
+        "data type = 12\n"
+        "interleave = bsq\n"
+        "map info = {UTM, 1.000, 1.000, 500000.0, 4000000.0, 30.0, -30.0, "
+        "1, North, WGS-84}\n"
+        f"{extra}"
+    )
+    path = os.path.join(tmp_path, f"{name}.hdr")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(hdr)
+    return path
+
+
+def test_envi_reader_registers_north_up(tmp_path):
+    """ENVI's negative dy must produce a north-up transform, not a south-up one.
+
+    from_origin() builds Affine(dx, 0, west, 0, -ysize, north), so handing it
+    the raw negative dy flipped the sign and put row 0 at the bottom.
+    """
+    from core.io.reader import open_raster
+
+    reader = open_raster(_write_envi_header(tmp_path))
+    transform = reader.metadata.transform
+
+    assert transform.e < 0, "row 0 must be the northern edge"
+    assert transform.f == pytest.approx(4000000.0)
+    # Six rows of 30 m south of the tie point.
+    assert transform.f + 6 * transform.e == pytest.approx(4000000.0 - 180.0)
+
+
+def test_envi_pixel_to_geo_agrees_with_the_transform(tmp_path):
+    """The map-info path and the transform path must not disagree on direction."""
+    from core.io.reader import open_raster
+
+    reader = open_raster(_write_envi_header(tmp_path))
+
+    top_x, top_y = reader.pixel_to_geo(0, 0)
+    bot_x, bot_y = reader.pixel_to_geo(0, 5)
+
+    assert bot_y < top_y, "going down the image must go south"
+    assert top_y == pytest.approx(4000000.0)
+    assert bot_y == pytest.approx(4000000.0 - 150.0)
+    assert bot_x == pytest.approx(top_x)
+
+
+def test_envi_reader_propagates_data_ignore_value(tmp_path):
+    """'data ignore value' is the ENVI nodata sentinel and must reach the metadata.
+
+    Without it every -9999 pixel reads as signal, which corrupts statistics,
+    display stretches, DOS-1 calibration and nodata-masked mosaicking.
+    """
+    from core.io.reader import open_raster
+
+    plain = open_raster(_write_envi_header(tmp_path, "plain")).metadata
+    assert plain.nodata is None
+
+    flagged = open_raster(
+        _write_envi_header(tmp_path, "flagged", "data ignore value = -9999\n")
+    ).metadata
+    assert flagged.nodata == pytest.approx(-9999.0)
+
+    # A zero sentinel would mask every genuinely black pixel, so it is ignored.
+    zeroed = open_raster(
+        _write_envi_header(tmp_path, "zeroed", "data ignore value = 0\n")
+    ).metadata
+    assert zeroed.nodata is None
+
+
+def test_synthetic_envi_writer_uses_negative_dy(tmp_path):
+    """Files we write must follow the ENVI convention so they round-trip north-up."""
+    import os
+
+    from core.io.reader import open_raster
+    from core.synthetic import generate_synthetic_cube, write_envi_dataset
+
+    cube, wl, _ = generate_synthetic_cube(lines=8, samples=8, bands=3)
+    base = os.path.join(tmp_path, "syn")
+    hdr, _ = write_envi_dataset(base, cube, wl, interleave="bsq")
+
+    with open(hdr, encoding="utf-8") as fh:
+        content = fh.read()
+    map_info = [ln for ln in content.splitlines() if ln.startswith("map info")][0]
+    fields = [f.strip() for f in map_info.split("=", 1)[1].split(",")]
+    assert float(fields[6]) < 0, "dy must be negative for a north-referenced image"
+
+    reader = open_raster(hdr)
+    assert reader.metadata.transform.e < 0, "our own output must read back north-up"
+
+
+def test_nodata_pixels_are_excluded_from_band_statistics(tmp_path):
+    """A nodata sentinel must not drag the statistics towards -9999."""
+    from core.io.reader import open_raster
+    from core.algorithms.statistics import calculate_band_statistics
+
+    reader = open_raster(
+        _write_envi_header(tmp_path, "stats", "data ignore value = -9999\n")
+    )
+    band = reader.read_band(0).astype(np.float64)
+    band[:, -1] = -9999.0
+
+    stats = calculate_band_statistics(band, nodata=reader.metadata.nodata)
+
+    assert stats["min"] > -100.0, "the sentinel leaked into the statistics"
+    # The masked column held 4, 9, 14, 19, 24 and 29; the survivors top out at 28.
+    assert stats["max"] == pytest.approx(28.0)
+
+
+def test_single_band_pca_mnf_and_sff_do_not_crash():
+    """np.cov returns a 0-d array for one band, which eigh then rejects."""
+    from core.algorithms.spectral import compute_mnf, compute_pca, spectral_feature_fitting
+
+    cube = np.random.default_rng(0).random((1, 4, 5)).astype(np.float32)
+
+    scores, _, _ = compute_pca(cube, num_components=1)
+    assert scores.shape == (1, 4, 5)
+    assert np.all(np.isfinite(scores))
+
+    mnf, noise = compute_mnf(cube, num_components=1)
+    assert mnf.shape == (1, 4, 5)
+    assert noise.shape == (1,)
+
+    ends, _ = spectral_feature_fitting(cube, num_features=0)
+    assert ends.shape[1] == 1
+
+
+def test_mosaic_survives_a_reader_with_no_band_details(tmp_path):
+    """The band-details fallback must construct a BandInfo that actually exists."""
+    from core.io.reader import open_raster
+    from core.algorithms.mosaic import mosaic_rasters
+
+    reader = open_raster(_write_envi_header(tmp_path, "nobands"))
+    reader.metadata.band_details = None
+
+    cube, meta = mosaic_rasters([reader], resample_method="nearest")
+
+    assert cube.shape == (6, 5, 2)
+    assert len(meta.band_details) == 2
+    assert meta.band_details[0].name == "Band 1"
+
+
+class _FakeLandsatReader:
+    """Minimal reader stand-in carrying Landsat MTL rescaling metadata."""
+
+    def __init__(self, band_name, mtl_band):
+        from core.models import BandInfo, RasterMetadata
+
+        self.metadata = RasterMetadata(
+            width=2, height=2, bands=1, dtype="float32",
+            crs="EPSG:32650", nodata=None,
+            band_details=[
+                BandInfo(index=0, name=band_name, wavelength=500.0, mtl_band=mtl_band)
+            ],
+            raw_header={
+                "mtl_data": {
+                    "L1_METADATA_FILE": {
+                        "RADIOMETRIC_RESCALING": {
+                            f"REFLECTANCE_MULT_BAND_{n}": n * 0.00001
+                            for n in range(1, 12)
+                        } | {
+                            f"REFLECTANCE_ADD_BAND_{n}": -0.01 * n
+                            for n in range(1, 12)
+                        },
+                        "IMAGE_ATTRIBUTES": {"SUN_ELEVATION": 45.0},
+                    }
+                }
+            },
+        )
+
+    def read_band(self, index):
+        return np.full((2, 2), 20000.0, dtype=np.float32)
+
+
+def test_l57_bands_read_their_own_mtl_coefficients():
+    """Landsat 4/5/7 number the same physical bands differently from 8/9.
+
+    The L8/9 name table maps NIR to B5, SWIR 1 to B6 and leaves a bare
+    "Thermal Infrared" to fall through on the substring "red", so on L5/7 every
+    band but SWIR 2 read another band's REFLECTANCE_MULT_BAND_n.
+    """
+    from core.algorithms.radiometry import extract_landsat_cal_params
+
+    # band name -> the MTL band number that actually holds its coefficients
+    l57 = {
+        "Blue": 1, "Green": 2, "Red": 3,
+        "Near Infrared (NIR)": 4, "Shortwave Infrared 1 (SWIR 1)": 5,
+        "Shortwave Infrared 2 (SWIR 2)": 7, "Thermal Infrared": 6,
+    }
+    for name, mtl_band in l57.items():
+        params = extract_landsat_cal_params(_FakeLandsatReader(name, mtl_band))
+        assert params["reflectance_mult"][0] == pytest.approx(mtl_band * 0.00001), (
+            f"{name} read the wrong MTL band number"
+        )
+        assert params["reflectance_add"][0] == pytest.approx(-0.01 * mtl_band)
+
+
+def test_band_name_fallback_still_handles_a_bare_thermal_band():
+    """Without an MTL number, "Thermal Infrared" must not match the "red" rule."""
+    from core.algorithms.radiometry import extract_landsat_cal_params
+
+    reader = _FakeLandsatReader("Thermal Infrared", mtl_band=None)
+    params = extract_landsat_cal_params(reader)
+
+    # L8/9 TIRS 1 is B10; the failure mode was B4, i.e. the Red coefficient.
+    assert params["reflectance_mult"][0] == pytest.approx(10 * 0.00001)
+
+
+def test_dos1_is_reproducible_across_calls():
+    """DOS-1 must return the same result for the same image every time.
+
+    It samples pixels above 100k through the unseeded global RNG, so the dark
+    object value used to change between runs on an unchanged scene.
+    """
+    from core.algorithms.radiometry import calibrate_band_to_reflectance
+
+    rng = np.random.default_rng(1)
+    band = rng.uniform(500, 30000, size=(500, 500)).astype(np.float32)
+
+    runs = [
+        calibrate_band_to_reflectance(
+            band, mult=2e-5, add=-0.1, sun_elevation_deg=45.0, apply_dos=True
+        )
+        for _ in range(4)
+    ]
+    for other in runs[1:]:
+        np.testing.assert_array_equal(runs[0], other)
+
+
+def test_band_math_integer_casts_keep_nodata_as_nan():
+    """A float-to-int cast turns NaN into INT_MIN, not into a nodata pixel."""
+    from core.algorithms.indices import evaluate_band_math
+
+    band = np.array([[np.nan, 5.0], [7.0, 9.0]])
+
+    for expr in ("fix(band)", "int(band)", "long(band)", "byte(band)", "uint(band)"):
+        out = np.ravel(np.asarray(evaluate_band_math(expr, {"band": band})))
+        assert np.isnan(out[0]), f"{expr} lost the nodata pixel"
+        np.testing.assert_array_equal(out[1:], np.array([5.0, 7.0, 9.0]))
+
+    # A nodata pixel must not become a confident comparison either.
+    mask = np.asarray(evaluate_band_math("band > 3", {"band": band}))
+    assert mask[0, 0] == 0 or np.isnan(mask[0, 0])
+
+
+def test_band_math_integer_casts_still_truncate_and_clip():
+    """Preserving NaN must not change the truncation or saturation behaviour."""
+    from core.algorithms.indices import evaluate_band_math
+
+    filler = np.zeros((2, 2), dtype=np.float32)
+    val = lambda expr: float(np.asarray(evaluate_band_math(expr, {"band": filler})).ravel()[0])
+
+    assert val("fix(2.7)") == 2.0
+    assert val("fix(-2.7)") == -2.0
+    assert val("byte(300)") == 255.0
+    assert val("byte(-5)") == 0.0
+    assert val("uint(70000)") == 65535.0
+    assert val("uint(-1)") == 0.0
+
+
+def test_squared_distances_survive_float32_dn_magnitudes():
+    """Nearest-centroid labelling must not depend on float32 rounding.
+
+    On raw DN the squared terms are ~1e9 while the gap between competing
+    classes is ~1e2, which is below float32 precision at that magnitude.
+    """
+    from core.algorithms.classification import _squared_distances
+
+    rng = np.random.default_rng(0)
+    data = rng.uniform(29000, 31000, size=(2000, 4)).astype(np.float32)
+    centers = np.array(
+        [[30000.0] * 4, [30001.0] * 4], dtype=np.float32
+    )
+
+    got = _squared_distances(data, centers)
+
+    # Reference: an exact, cancellation-free computation in Python floats.
+    ref = np.array(
+        [[float(np.sum((row.astype(np.float64) - c.astype(np.float64)) ** 2)) for c in centers]
+         for row in data]
+    )
+    np.testing.assert_allclose(got, ref, rtol=1e-9)
+    np.testing.assert_array_equal(np.argmin(got, axis=1), np.argmin(ref, axis=1))

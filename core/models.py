@@ -17,6 +17,10 @@ class BandInfo:
     wavelength: Optional[float] = None
     wavelength_unit: str = "nm"
     fwhm: Optional[float] = None
+    # Landsat MTL band number (1-11). The same physical band carries different
+    # numbers per spacecraft, so the reader records it here rather than leaving
+    # downstream code to guess from the band name.
+    mtl_band: Optional[int] = None
 
     def display_name(self) -> str:
         """Return a human-readable display string."""

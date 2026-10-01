@@ -182,7 +182,7 @@ interleave = {interleave}
 sensor type = Unknown
 byte order = 0
 wavelength units = nm
-map info = {{UTM, 1.000, 1.000, {easting:.3f}, {northing:.3f}, {pixel_size:.6f}, {pixel_size:.6f}, 50, North, WGS-84, units=Meters}}
+map info = {{UTM, 1.000, 1.000, {easting:.3f}, {northing:.3f}, {pixel_size:.6f}, {-pixel_size:.6f}, 50, North, WGS-84, units=Meters}}
 wavelength = {{{wl_str}}}
 """
     with open(hdr_path, "w", encoding="utf-8") as f:
